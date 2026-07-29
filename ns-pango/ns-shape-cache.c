@@ -208,6 +208,14 @@ key_free (gpointer data)
   g_free (key);
 }
 
+static gsize
+run_size (const CachedRun *run,
+          guint32          text_length)
+{
+  return run->num_glyphs * (sizeof (NsPangoGlyphInfo) + sizeof (int)) +
+         sizeof (NsPangoShapeKey) + text_length;
+}
+
 static void
 run_free (gpointer data)
 {
@@ -410,6 +418,10 @@ ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
       cache_bytes = 0;
     }
 
+  run = g_hash_table_lookup (shape_cache, key);
+  if (run != NULL)
+    cache_bytes -= run_size (run, key->text_length);
+
   run = g_new (CachedRun, 1);
   run->num_glyphs = glyphs->num_glyphs;
   run->glyphs = g_memdup2 (glyphs->glyphs,
@@ -417,8 +429,7 @@ ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
   run->log_clusters = g_memdup2 (glyphs->log_clusters,
                                  glyphs->num_glyphs * sizeof (int));
 
-  cache_bytes += glyphs->num_glyphs * (sizeof (NsPangoGlyphInfo) + sizeof (int)) +
-                 sizeof (NsPangoShapeKey) + key->text_length;
+  cache_bytes += run_size (run, key->text_length);
 
   g_hash_table_replace (shape_cache, key, run);
 
