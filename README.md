@@ -1,3 +1,39 @@
+ns-pango
+========
+
+A fork of [Pango](https://gitlab.gnome.org/GNOME/pango) for the
+[Northstar](https://github.com/nordstjernen-web/northstar-browser) browser
+engine. It is not a drop-in replacement for Pango and is not meant to be
+installed system-wide; Northstar consumes it as a pinned meson subproject.
+
+Three things differ from upstream.
+
+**A cross-layout shaping cache.** Upstream keeps nothing that outlives a
+`PangoLayout`, so a browser that measures a run and then paints it hands
+the same bytes to HarfBuzz twice, and a table cell is shaped for
+`min-content`, for `max-content` and again to lay out. `ns-shape-cache.c`
+keeps the finished glyph string in a process-wide hash keyed on everything
+`hb_shape` reads, and only for runs whose shaping cannot depend on the text
+around them. `pango_context_get_metrics` is likewise cached per font
+description rather than only for the context's own. Set
+`NS_PANGO_SHAPE_CACHE=0` to disable the cache, or `=verify` to shape both
+ways and warn on any difference.
+
+**Every symbol is renamed** — `ns_pango_*`, `NsPango*`, `NS_PANGO_*`,
+`NS_TYPE_PANGO_*`, and headers under `ns-pango/`. GTK loads the system
+Pango into the same process, and GObject aborts when a second library
+registers a type name it already holds. `ns-rename.py` performs the whole
+rewrite and is idempotent, so run it after merging upstream instead of
+editing by hand.
+
+**Backends and tooling a browser never links are gone**: Xft,
+Win32/DirectWrite, CoreText, the deprecated `pango_ot_*` API, layout
+serialization, FT2 rendering, the test suite, examples, utilities,
+documentation and GObject-introspection. What remains is the core text
+layer with the cairo and fontconfig/FreeType backends.
+
+Upstream's own description follows.
+
 Pango
 =====
 
