@@ -1,4 +1,4 @@
-project('pango', 'c', 'cpp',
+project('ns-pango', 'c', 'cpp',
         version: '1.58.0',
         license: 'LGPLv2.1+',
         default_options: [
@@ -16,38 +16,38 @@ add_project_arguments([
   language: 'c'
 )
 
-pango_prefix = get_option('prefix')
-pango_libdir = join_paths(pango_prefix, get_option('libdir'))
-pango_sysconfdir = join_paths(pango_prefix, get_option('sysconfdir'))
-pango_includedir = join_paths(pango_prefix, get_option('includedir'))
-pango_datadir = join_paths(pango_prefix, get_option('datadir'))
-pango_libexecdir = join_paths(pango_prefix, get_option('libexecdir'))
+ns_pango_prefix = get_option('prefix')
+ns_pango_libdir = join_paths(ns_pango_prefix, get_option('libdir'))
+ns_pango_sysconfdir = join_paths(ns_pango_prefix, get_option('sysconfdir'))
+ns_pango_includedir = join_paths(ns_pango_prefix, get_option('includedir'))
+ns_pango_datadir = join_paths(ns_pango_prefix, get_option('datadir'))
+ns_pango_libexecdir = join_paths(ns_pango_prefix, get_option('libexecdir'))
 
 version = meson.project_version().split('.')
-pango_major_version = version[0].to_int()
-pango_minor_version = version[1].to_int()
-pango_micro_version = version[2].to_int()
+ns_pango_major_version = version[0].to_int()
+ns_pango_minor_version = version[1].to_int()
+ns_pango_micro_version = version[2].to_int()
 
-pango_interface_age = pango_minor_version.is_odd() ? 0 : pango_micro_version
-pango_binary_age = pango_minor_version * 100 + pango_micro_version
+ns_pango_interface_age = ns_pango_minor_version.is_odd() ? 0 : ns_pango_micro_version
+ns_pango_binary_age = ns_pango_minor_version * 100 + ns_pango_micro_version
 
-pango_api_version = '@0@.0'.format(pango_major_version)
-pango_api_name = 'pango-@0@'.format(pango_api_version)
-pango_api_path = join_paths(pango_api_name, 'pango')
+ns_pango_api_version = '@0@.0'.format(ns_pango_major_version)
+ns_pango_api_name = 'ns-pango-@0@'.format(ns_pango_api_version)
+ns_pango_api_path = join_paths(ns_pango_api_name, 'ns-pango')
 
-pango_conf = configuration_data()
+ns_pango_conf = configuration_data()
 
-pango_conf.set('PANGO_BINARY_AGE', pango_binary_age)
-pango_conf.set('PANGO_INTERFACE_AGE', pango_interface_age)
-pango_conf.set('PANGO_VERSION_MAJOR', pango_major_version)
-pango_conf.set('PANGO_VERSION_MINOR', pango_minor_version)
-pango_conf.set('PANGO_VERSION_MICRO', pango_micro_version)
+ns_pango_conf.set('NS_PANGO_BINARY_AGE', ns_pango_binary_age)
+ns_pango_conf.set('NS_PANGO_INTERFACE_AGE', ns_pango_interface_age)
+ns_pango_conf.set('NS_PANGO_VERSION_MAJOR', ns_pango_major_version)
+ns_pango_conf.set('NS_PANGO_VERSION_MINOR', ns_pango_minor_version)
+ns_pango_conf.set('NS_PANGO_VERSION_MICRO', ns_pango_micro_version)
 
 # Maintain version scheme with libtool
-pango_soversion = 0
-pango_libversion = '@0@.@1@.@2@'.format(pango_soversion, (pango_binary_age - pango_interface_age), pango_interface_age)
-osx_current = pango_binary_age - pango_interface_age + 1
-pango_osxversion = [osx_current, '@0@.@1@.0'.format(osx_current, pango_interface_age)]
+ns_pango_soversion = 0
+ns_pango_libversion = '@0@.@1@.@2@'.format(ns_pango_soversion, (ns_pango_binary_age - ns_pango_interface_age), ns_pango_interface_age)
+osx_current = ns_pango_binary_age - ns_pango_interface_age + 1
+ns_pango_osxversion = [osx_current, '@0@.@1@.0'.format(osx_current, ns_pango_interface_age)]
 
 cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
@@ -164,13 +164,13 @@ endif
 # Symbol visibility
 if get_option('default_library') != 'static'
   if host_system == 'windows'
-    pango_conf.set('DLL_EXPORT', true)
-    pango_conf.set('_PANGO_EXTERN', '__declspec(dllexport) extern')
+    ns_pango_conf.set('DLL_EXPORT', true)
+    ns_pango_conf.set('_PANGO_EXTERN', '__declspec(dllexport) extern')
     if cc.get_id() != 'msvc'
       test_cflags += ['-fvisibility=hidden']
     endif
   else
-    pango_conf.set('_PANGO_EXTERN', '__attribute__((visibility("default"))) extern')
+    ns_pango_conf.set('_PANGO_EXTERN', '__attribute__((visibility("default"))) extern')
     test_cflags += ['-fvisibility=hidden']
   endif
 endif
@@ -192,12 +192,12 @@ endif
 
 # Use debug/optimization flags to determine whether to enable debug or disable
 # cast checks
-pango_debug_cflags = []
+ns_pango_debug_cflags = []
 if get_option('debug')
-  pango_debug_cflags = [ '-DPANGO_ENABLE_DEBUG' ]
+  ns_pango_debug_cflags = [ '-DNS_PANGO_ENABLE_DEBUG' ]
   message('Enabling various debug infrastructure')
 elif get_option('optimization') in ['2', '3', 's']
-  pango_debug_cflags = [ '-DG_DISABLE_CAST_CHECKS' ]
+  ns_pango_debug_cflags = [ '-DG_DISABLE_CAST_CHECKS' ]
   message('Disabling cast checks')
   # TODO: We may want a configuration argument to add `G_DISABLE_CHECKS`
   # and `G_DISABLE_ASSERT` from the build, for specific build environments.
@@ -206,7 +206,7 @@ elif get_option('optimization') in ['2', '3', 's']
 endif
 
 # Dependencies
-pango_deps = []
+ns_pango_deps = []
 
 glib_major_req = 2
 glib_minor_req = 88
@@ -235,15 +235,15 @@ gobject_dep = dependency('gobject-2.0', version: glib_req)
 gio_dep = dependency('gio-2.0', version: glib_req)
 gi_dep = dependency('gobject-introspection-1.0', version: gi_req, required: get_option('introspection').enabled())
 fribidi_dep = dependency('fribidi', version: fribidi_req, default_options: ['docs=false'])
-pango_deps += [mathlib_dep, glib_dep, gobject_dep, gio_dep, fribidi_dep]
+ns_pango_deps += [mathlib_dep, glib_dep, gobject_dep, gio_dep, fribidi_dep]
 
 thai_dep = dependency('libthai', version: libthai_req, required: get_option('libthai'))
 if thai_dep.found()
-  pango_conf.set('HAVE_LIBTHAI', 1)
-  pango_deps += thai_dep
+  ns_pango_conf.set('HAVE_LIBTHAI', 1)
+  ns_pango_deps += thai_dep
 
   if cc.has_function('th_brk_find_breaks', dependencies: thai_dep)
-    pango_conf.set('HAVE_TH_BRK_FIND_BREAKS', 1)
+    ns_pango_conf.set('HAVE_TH_BRK_FIND_BREAKS', 1)
   endif
 endif
 
@@ -282,7 +282,7 @@ harfbuzz_dep = dependency('harfbuzz',
                           version: harfbuzz_req,
                           default_options: harfbuzz_fallback_options)
 
-pango_deps += harfbuzz_dep
+ns_pango_deps += harfbuzz_dep
 # In meson 1.1.0, this check can be replaced with .enable_if() to simplify the
 # logic in the fallback handling.
 if fontconfig_option.disabled() and fontconfig_required
@@ -296,7 +296,7 @@ fontconfig_dep = dependency('fontconfig', version: fontconfig_req,
                             required: fontconfig_option)
 
 if fontconfig_dep.found()
-  pango_deps += fontconfig_dep
+  ns_pango_deps += fontconfig_dep
 endif
 
 # If option is 'auto' or 'enabled' it is not required to find freetype2 on the
@@ -329,8 +329,8 @@ endif
 # To build pangoft2, we need HarfBuzz, FontConfig and FreeType
 build_pangoft2 = fontconfig_dep.found() and freetype_dep.found()
 if build_pangoft2
-  pango_conf.set('HAVE_FREETYPE', 1)
-  pango_deps += freetype_dep
+  ns_pango_conf.set('HAVE_FREETYPE', 1)
+  ns_pango_deps += freetype_dep
 endif
 
 
@@ -347,10 +347,10 @@ if host_system == 'darwin' and subsystem == 'macos'
                            name: 'CoreText availability',
                            dependencies: dependency('appleframeworks', modules: 'ApplicationServices'))
   if has_core_text
-    pango_conf.set('HAVE_CORE_TEXT', 1)
+    ns_pango_conf.set('HAVE_CORE_TEXT', 1)
   endif
 
-  pango_deps += dependency('appleframeworks', modules: [ 'CoreFoundation', 'ApplicationServices' ])
+  ns_pango_deps += dependency('appleframeworks', modules: [ 'CoreFoundation', 'ApplicationServices' ])
 endif
 
 # Check for dwrite_3.h (from more recent Windows SDK or mingw-w64)
@@ -394,18 +394,18 @@ if host_system == 'windows'
   if not cairo_dep.found() or cairo_dwrite_dep.found()
     if harfbuzz_dep.type_name() == 'internal' or \
        cpp.has_function('hb_directwrite_face_create', dependencies: harfbuzz_dep)
-      pango_conf.set('USE_HB_DWRITE', 1)
+      ns_pango_conf.set('USE_HB_DWRITE', 1)
     endif
   else
     if harfbuzz_dep.type_name() == 'internal' or \
        cc.has_function('hb_gdi_face_create', dependencies: harfbuzz_dep)
-      pango_conf.set('USE_HB_GDI', 1)
+      ns_pango_conf.set('USE_HB_GDI', 1)
     endif
   endif
 endif
 
-pango_font_backends = []
-pango_cairo_backends = []
+ns_pango_font_backends = []
+ns_pango_cairo_backends = []
 
 if cairo_dep.found()
   # Check the following Cairo font backends
@@ -457,15 +457,15 @@ int main() {
           endif
         endif
       endif
-      if b[0] == 'cairo-quartz' and not pango_conf.has('HAVE_CORE_TEXT')
+      if b[0] == 'cairo-quartz' and not ns_pango_conf.has('HAVE_CORE_TEXT')
         continue
       endif
-      pango_conf.set(b[2], 1)
-      pango_font_backends += b[3]
+      ns_pango_conf.set(b[2], 1)
+      ns_pango_font_backends += b[3]
     endif
   endforeach
 
-  if pango_font_backends.length() == 0
+  if ns_pango_font_backends.length() == 0
     error('No Cairo font backends found')
   endif
 
@@ -494,29 +494,29 @@ int main() {
       endforeach
     endif
     if dep.found()
-      pango_conf.set(b[2], 1)
-      pango_cairo_backends += b[3]
+      ns_pango_conf.set(b[2], 1)
+      ns_pango_cairo_backends += b[3]
     endif
   endforeach
 endif
 
 if cairo_dep.found()
-  pango_conf.set('HAVE_CAIRO', 1)
-  pango_deps += cairo_dep
+  ns_pango_conf.set('HAVE_CAIRO', 1)
+  ns_pango_deps += cairo_dep
 
   pangocairo_requires = ''
 
-  if pango_font_backends.contains('freetype')
+  if ns_pango_font_backends.contains('freetype')
     pangocairo_requires += 'pangoft2 '
   endif
 
-  if pango_font_backends.contains('win32')
+  if ns_pango_font_backends.contains('win32')
     pangocairo_requires += 'pangowin32 '
   endif
 endif
 
 if cairo_dwrite_dep.found()
-  pango_conf.set('HAVE_CAIRO_WIN32_DIRECTWRITE', 1)
+  ns_pango_conf.set('HAVE_CAIRO_WIN32_DIRECTWRITE', 1)
 endif
 
 # introspection
@@ -537,24 +537,22 @@ libsysprof_capture_dep = dependency('sysprof-capture-4',
     'help=false',
   ],
 )
-pango_conf.set('HAVE_SYSPROF', libsysprof_capture_dep.found())
-pango_deps += libsysprof_capture_dep
+ns_pango_conf.set('HAVE_SYSPROF', libsysprof_capture_dep.found())
+ns_pango_deps += libsysprof_capture_dep
 
 gnome = import('gnome')
 pkgconfig = import('pkgconfig')
 
 # Internal configuration header
-configure_file(output: 'config.h', configuration: pango_conf)
+configure_file(output: 'config.h', configuration: ns_pango_conf)
 
 root_inc = include_directories('.')
-pango_inc = include_directories('pango')
+ns_pango_inc = include_directories('ns-pango')
 
-subdir('pango')
+subdir('ns-pango')
 
-if not meson.is_subproject()
-endif
 
-summary('Fontconfig', pango_font_backends.contains('freetype'), section: 'Font backends')
+summary('Fontconfig', ns_pango_font_backends.contains('freetype'), section: 'Font backends')
 
 summary('Cairo', cairo_dep.found(), section: 'Features')
 summary('Thai', thai_dep.found(), section: 'Features')
@@ -567,7 +565,7 @@ summary('Debugging', get_option('debug'), section: 'Build')
 summary('Optimization', get_option('optimization'), section: 'Build')
 summary('Introspection', build_gir, section: 'Build')
 
-summary('prefix', pango_prefix, section: 'Directories')
-summary('includedir', pango_includedir, section: 'Directories')
-summary('libdir', pango_libdir, section: 'Directories')
-summary('datadir', pango_datadir, section: 'Directories')
+summary('prefix', ns_pango_prefix, section: 'Directories')
+summary('includedir', ns_pango_includedir, section: 'Directories')
+summary('libdir', ns_pango_libdir, section: 'Directories')
+summary('datadir', ns_pango_datadir, section: 'Directories')
