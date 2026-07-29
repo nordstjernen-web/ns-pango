@@ -41,7 +41,8 @@
  */
 
 #define NS_SHAPE_CACHE_MAX_ENTRIES 20000
-#define NS_SHAPE_CACHE_MAX_TEXT    512
+#define NS_SHAPE_CACHE_MAX_TEXT    4096
+#define NS_SHAPE_CACHE_MAX_BYTES   (48 * 1024 * 1024)
 
 struct _NsPangoShapeKey
 {
@@ -69,9 +70,12 @@ typedef struct
 } CachedRun;
 
 static GHashTable *shape_cache;
+G_LOCK_DEFINE_STATIC (shape_cache);
+static gsize cache_bytes;
 static guint64 cache_hits;
 static guint64 cache_misses;
 static guint64 cache_skips;
+static guint64 skip_font, skip_len, skip_feat, skip_hyphen, skip_ctx;
 
 static gboolean
 enabled_from_env (void)
@@ -116,16 +120,12 @@ boundary_char (gunichar ch)
 static gboolean
 attaches_to_neighbour (gunichar ch)
 {
-  switch (g_unichar_type (ch))
-    {
-    case G_UNICODE_NON_SPACING_MARK:
-    case G_UNICODE_SPACING_MARK:
-    case G_UNICODE_ENCLOSING_MARK:
-    case G_UNICODE_FORMAT:
-      return TRUE;
-    default:
-      return FALSE;
-    }
+  GUnicodeType type = g_unichar_type (ch);
+
+  return type == G_UNICODE_NON_SPACING_MARK ||
+         type == G_UNICODE_SPACING_MARK ||
+         type == G_UNICODE_ENCLOSING_MARK ||
+         type == G_UNICODE_FORMAT;
 }
 
 static gboolean
@@ -138,19 +138,23 @@ context_independent (const char *item_text,
 
   if (item_text > paragraph_text)
     {
-      const char *prev = g_utf8_prev_char (item_text);
+      gunichar first = g_utf8_get_char (item_text);
 
-      if (!boundary_char (g_utf8_get_char (prev)))
+      if (attaches_to_neighbour (first))
         return FALSE;
-      if (attaches_to_neighbour (g_utf8_get_char (item_text)))
+      if (!boundary_char (first) &&
+          !boundary_char (g_utf8_get_char (g_utf8_prev_char (item_text))))
         return FALSE;
     }
 
   if (item_end < paragraph_text + paragraph_length)
     {
-      if (!boundary_char (g_utf8_get_char (item_end)))
+      gunichar last = g_utf8_get_char (g_utf8_prev_char (item_end));
+
+      if (attaches_to_neighbour (last))
         return FALSE;
-      if (attaches_to_neighbour (g_utf8_get_char (g_utf8_prev_char (item_end))))
+      if (!boundary_char (last) &&
+          !boundary_char (g_utf8_get_char (item_end)))
         return FALSE;
     }
 
@@ -238,6 +242,10 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
       n_features > G_N_ELEMENTS (key->features) ||
       (analysis->flags & NS_PANGO_ANALYSIS_FLAG_NEED_HYPHEN) != 0)
     {
+      if (analysis->font == NULL) skip_font++;
+      else if (item_length <= 0 || item_length > NS_SHAPE_CACHE_MAX_TEXT) skip_len++;
+      else if (n_features > G_N_ELEMENTS (key->features)) skip_feat++;
+      else skip_hyphen++;
       cache_skips++;
       return NULL;
     }
@@ -245,6 +253,7 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
   if (!context_independent (item_text, item_length,
                             paragraph_text, paragraph_length))
     {
+      skip_ctx++;
       cache_skips++;
       return NULL;
     }
@@ -307,18 +316,23 @@ ns_pango_shape_cache_lookup (const NsPangoShapeKey *key,
 {
   CachedRun *run;
 
-  if (key == NULL || shape_cache == NULL)
+  if (key == NULL)
     return FALSE;
 
-  run = g_hash_table_lookup (shape_cache, key);
+  G_LOCK (shape_cache);
+
+  run = shape_cache != NULL ? g_hash_table_lookup (shape_cache, key) : NULL;
   if (run == NULL)
     {
       cache_misses++;
+      G_UNLOCK (shape_cache);
       return FALSE;
     }
 
   cache_hits++;
   copy_run_to_glyphs (run, glyphs);
+
+  G_UNLOCK (shape_cache);
 
   return TRUE;
 }
@@ -329,15 +343,23 @@ ns_pango_shape_cache_matches (const NsPangoShapeKey    *key,
 {
   CachedRun *run;
 
-  if (key == NULL || shape_cache == NULL)
+  if (key == NULL)
     return TRUE;
 
-  run = g_hash_table_lookup (shape_cache, key);
+  G_LOCK (shape_cache);
+
+  run = shape_cache != NULL ? g_hash_table_lookup (shape_cache, key) : NULL;
   if (run == NULL)
-    return TRUE;
+    {
+      G_UNLOCK (shape_cache);
+      return TRUE;
+    }
 
   if (run->num_glyphs != glyphs->num_glyphs)
-    return FALSE;
+    {
+      G_UNLOCK (shape_cache);
+      return FALSE;
+    }
 
   for (int i = 0; i < run->num_glyphs; i++)
     {
@@ -351,8 +373,13 @@ ns_pango_shape_cache_matches (const NsPangoShapeKey    *key,
           a->attr.is_cluster_start != b->attr.is_cluster_start ||
           a->attr.is_color != b->attr.is_color ||
           run->log_clusters[i] != glyphs->log_clusters[i])
-        return FALSE;
+        {
+          G_UNLOCK (shape_cache);
+          return FALSE;
+        }
     }
+
+  G_UNLOCK (shape_cache);
 
   return TRUE;
 }
@@ -372,10 +399,16 @@ ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
       return;
     }
 
+  G_LOCK (shape_cache);
+
   if (G_UNLIKELY (shape_cache == NULL))
     shape_cache = g_hash_table_new_full (key_hash, key_equal, key_free, run_free);
-  else if (g_hash_table_size (shape_cache) >= NS_SHAPE_CACHE_MAX_ENTRIES)
-    g_hash_table_remove_all (shape_cache);
+  else if (g_hash_table_size (shape_cache) >= NS_SHAPE_CACHE_MAX_ENTRIES ||
+           cache_bytes >= NS_SHAPE_CACHE_MAX_BYTES)
+    {
+      g_hash_table_remove_all (shape_cache);
+      cache_bytes = 0;
+    }
 
   run = g_new (CachedRun, 1);
   run->num_glyphs = glyphs->num_glyphs;
@@ -384,14 +417,24 @@ ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
   run->log_clusters = g_memdup2 (glyphs->log_clusters,
                                  glyphs->num_glyphs * sizeof (int));
 
+  cache_bytes += glyphs->num_glyphs * (sizeof (NsPangoGlyphInfo) + sizeof (int)) +
+                 sizeof (NsPangoShapeKey) + key->text_length;
+
   g_hash_table_replace (shape_cache, key, run);
+
+  G_UNLOCK (shape_cache);
 }
 
 void
 ns_pango_cache_clear (void)
 {
+  G_LOCK (shape_cache);
+
   if (shape_cache != NULL)
     g_hash_table_remove_all (shape_cache);
+  cache_bytes = 0;
+
+  G_UNLOCK (shape_cache);
 }
 
 void
@@ -406,8 +449,21 @@ ns_pango_cache_get_stats (guint64 *hits,
                           guint64 *skipped,
                           guint64 *entries)
 {
+  G_LOCK (shape_cache);
+
   if (hits) *hits = cache_hits;
   if (misses) *misses = cache_misses;
   if (skipped) *skipped = cache_skips;
   if (entries) *entries = shape_cache ? g_hash_table_size (shape_cache) : 0;
+
+  if (g_getenv ("NS_PANGO_CACHE_DEBUG") != NULL)
+    g_printerr ("[ns-pango] skips: font=%llu len=%llu features=%llu "
+                "hyphen=%llu context=%llu\n",
+                (unsigned long long) skip_font,
+                (unsigned long long) skip_len,
+                (unsigned long long) skip_feat,
+                (unsigned long long) skip_hyphen,
+                (unsigned long long) skip_ctx);
+
+  G_UNLOCK (shape_cache);
 }
