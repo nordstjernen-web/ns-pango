@@ -62,7 +62,8 @@ jobs:
             -Dfreetype=enabled \
             -Dintrospection=disabled \
             -Dsysprof=disabled \
-            -Dlibthai=auto
+            -Dlibthai=auto \
+            --wrap-mode=nofallback
 
       - name: Build
         run: meson compile -C builddir

@@ -215,8 +215,8 @@ glib_req       = '>= @0@.@1@'.format(glib_major_req, glib_minor_req)
 gi_req         = '>= 1.83.2'
 fribidi_req    = '>= 1.0.6'
 libthai_req    = '>= 0.1.9'
-harfbuzz_req   = '>= 8.4.0'
-fontconfig_req = '>= 2.17.0'
+harfbuzz_req   = '>= 8.3.0'
+fontconfig_req = '>= 2.15.0'
 xft_req        = '>= 2.0.0'
 cairo_req      = '>= 1.18.0'
 
@@ -295,6 +295,11 @@ fontconfig_dep = dependency('fontconfig', version: fontconfig_req,
 
 if fontconfig_dep.found()
   ns_pango_deps += fontconfig_dep
+  # Added in fontconfig 2.15.90; Ubuntu 24.04 still ships 2.15.0.
+  ns_pango_conf.set('HAVE_FC_CONFIG_SET_DEFAULT_SUBSTITUTE',
+                    cc.has_function('FcConfigSetDefaultSubstitute',
+                                    dependencies: fontconfig_dep,
+                                    prefix: '#include <fontconfig/fontconfig.h>'))
 endif
 
 # If option is 'auto' or 'enabled' it is not required to find freetype2 on the

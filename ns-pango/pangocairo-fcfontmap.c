@@ -111,7 +111,11 @@ ns_pango_cairo_fc_font_map_fontset_key_substitute (NsPangoFcFontMap    *fcfontma
     cairo_ft_font_options_substitute (ns_pango_fc_fontset_key_get_context_key (fontkey),
 				      pattern);
 
+#ifdef HAVE_FC_CONFIG_SET_DEFAULT_SUBSTITUTE
   FcConfigSetDefaultSubstitute (ns_pango_fc_font_map_get_config (fcfontmap), pattern);
+#else
+  FcDefaultSubstitute (pattern);
+#endif
 }
 
 static double

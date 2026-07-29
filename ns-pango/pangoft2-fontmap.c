@@ -358,7 +358,11 @@ _ns_pango_ft2_font_map_default_substitute (NsPangoFcFontMap *fcfontmap,
 
   if (FcPatternGet (pattern, FC_DPI, 0, &v) == FcResultNoMatch)
     FcPatternAddDouble (pattern, FC_DPI, ft2fontmap->dpi_y);
+#ifdef HAVE_FC_CONFIG_SET_DEFAULT_SUBSTITUTE
   FcConfigSetDefaultSubstitute (ns_pango_fc_font_map_get_config (fcfontmap), pattern);
+#else
+  FcDefaultSubstitute (pattern);
+#endif
 }
 
 static double
