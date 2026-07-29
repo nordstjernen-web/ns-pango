@@ -250,11 +250,17 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
       n_features > G_N_ELEMENTS (key->features) ||
       (analysis->flags & NS_PANGO_ANALYSIS_FLAG_NEED_HYPHEN) != 0)
     {
-      if (analysis->font == NULL) skip_font++;
-      else if (item_length <= 0 || item_length > NS_SHAPE_CACHE_MAX_TEXT) skip_len++;
-      else if (n_features > G_N_ELEMENTS (key->features)) skip_feat++;
-      else skip_hyphen++;
+      if (analysis->font == NULL)
+        skip_font++;
+      else if (item_length <= 0 || item_length > NS_SHAPE_CACHE_MAX_TEXT)
+        skip_len++;
+      else if (n_features > G_N_ELEMENTS (key->features))
+        skip_feat++;
+      else
+        skip_hyphen++;
+
       cache_skips++;
+
       return NULL;
     }
 
@@ -282,7 +288,7 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
     memcpy (key->features, features, n_features * sizeof (hb_feature_t));
   memcpy (key->text, item_text, item_length);
 
-  hash = g_str_hash (""); /* 5381 */
+  hash = 5381;
   for (int i = 0; i < item_length; i++)
     hash = hash * 33 + (guchar) key->text[i];
   hash = hash * 33 + GPOINTER_TO_UINT (key->font);

@@ -29,9 +29,6 @@ ns_pango_sources = [
   'reorder-items.c',
   'shape.c',
   'ns-shape-cache.c',
-  'serializer.c',
-  'json/gtkjsonparser.c',
-  'json/gtkjsonprinter.c',
 ]
 
 ns_pango_headers = [
@@ -165,28 +162,15 @@ if build_pangoft2
     'pango-trace.c',
   ]
 
-  pangoot_headers = [
-    'pango-ot.h',
-  ]
-
-  pangoot_public_sources = [
-    'pango-ot-buffer.c',
-    'pango-ot-info.c',
-    'pango-ot-ruleset.c',
-    'pango-ot-tag.c',
-  ]
-
   pangoft2_headers = [
     'pangoft2.h',
   ]
 
   pangoft2_public_sources = [
     'pangoft2-fontmap.c',
-    'pangoft2-render.c',
-    'pangoft2.c',
   ]
 
-  pangoft2_sources = pangofc_public_sources + pangoot_public_sources + pangoft2_public_sources
+  pangoft2_sources = pangofc_public_sources + pangoft2_public_sources
 
   if host_system == 'windows'
     pangoft2_rc = configure_file(
@@ -198,7 +182,7 @@ if build_pangoft2
     pangoft2_sources += pangoft2_res
   endif
 
-  install_headers(pangoft2_headers + pangofc_headers + pangoot_headers, subdir: ns_pango_api_path)
+  install_headers(pangoft2_headers + pangofc_headers, subdir: ns_pango_api_path)
 
   libpangoft2 = library(
     'ns-pangoft2-@0@'.format(ns_pango_api_version),
@@ -233,16 +217,6 @@ if build_pangoft2
     subdirs: ns_pango_api_name,
     libraries: freetype_lib,
     requires: [ 'ns-pango', freetype2_pc, 'fontconfig' ],
-  )
-
-  # Since we split the introspection data, we also need a split pkg-config
-  # file for Vala
-  pkgconfig.generate(
-    name: 'Pango OT',
-    description: 'OpenType font support for Pango (deprecated)',
-    filebase: 'ns-pangoot',
-    subdirs: ns_pango_api_name,
-    requires: [ 'pangoft2' ],
   )
 
   pkgconfig.generate(
