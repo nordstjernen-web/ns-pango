@@ -26,6 +26,7 @@
 #include "pango-context.h"
 #include "pango-context-private.h"
 #include "pango-impl-utils.h"
+#include "ns-shape-cache.h"
 
 #include "pango-font-private.h"
 #include "pango-item-private.h"
@@ -104,6 +105,8 @@ ns_pango_context_finalize (GObject *object)
 
   if (context->metrics)
     ns_pango_font_metrics_unref (context->metrics);
+
+  g_clear_pointer (&context->metrics_cache, g_hash_table_unref);
 
   G_OBJECT_CLASS (ns_pango_context_parent_class)->finalize (object);
 }
@@ -686,6 +689,79 @@ update_metrics_from_items (NsPangoFontMetrics *metrics,
  * Returns: (transfer full): a `NsPangoFontMetrics` object. The caller must call
  *   [method@Pango.FontMetrics.unref] when finished using the object.
  */
+typedef struct
+{
+  NsPangoFontDescription *desc;
+  NsPangoLanguage *language;
+} MetricsKey;
+
+static guint
+metrics_key_hash (gconstpointer v)
+{
+  const MetricsKey *key = v;
+
+  return ns_pango_font_description_hash (key->desc) ^
+         GPOINTER_TO_UINT (key->language);
+}
+
+static gboolean
+metrics_key_equal (gconstpointer a,
+                   gconstpointer b)
+{
+  const MetricsKey *ka = a;
+  const MetricsKey *kb = b;
+
+  return ka->language == kb->language &&
+         ns_pango_font_description_equal (ka->desc, kb->desc);
+}
+
+static void
+metrics_key_free (gpointer data)
+{
+  MetricsKey *key = data;
+
+  ns_pango_font_description_free (key->desc);
+  g_free (key);
+}
+
+static NsPangoFontMetrics *
+metrics_cache_lookup (NsPangoContext               *context,
+                      const NsPangoFontDescription *desc,
+                      NsPangoLanguage              *language)
+{
+  MetricsKey key;
+
+  if (context->metrics_cache == NULL)
+    return NULL;
+
+  key.desc = (NsPangoFontDescription *) desc;
+  key.language = language;
+
+  return g_hash_table_lookup (context->metrics_cache, &key);
+}
+
+static void
+metrics_cache_insert (NsPangoContext               *context,
+                      const NsPangoFontDescription *desc,
+                      NsPangoLanguage              *language,
+                      NsPangoFontMetrics           *metrics)
+{
+  MetricsKey *key;
+
+  if (context->metrics_cache == NULL)
+    context->metrics_cache = g_hash_table_new_full (metrics_key_hash,
+                                                    metrics_key_equal,
+                                                    metrics_key_free,
+                                                    (GDestroyNotify) ns_pango_font_metrics_unref);
+
+  key = g_new (MetricsKey, 1);
+  key->desc = ns_pango_font_description_copy (desc);
+  key->language = language;
+
+  g_hash_table_replace (context->metrics_cache, key,
+                        ns_pango_font_metrics_ref (metrics));
+}
+
 NsPangoFontMetrics *
 ns_pango_context_get_metrics (NsPangoContext               *context,
                            const NsPangoFontDescription *desc,
@@ -710,6 +786,10 @@ ns_pango_context_get_metrics (NsPangoContext               *context,
       context->metrics != NULL)
     return ns_pango_font_metrics_ref (context->metrics);
 
+  metrics = metrics_cache_lookup (context, desc, language);
+  if (metrics != NULL)
+    return ns_pango_font_metrics_ref (metrics);
+
   current_fonts = ns_pango_font_map_load_fontset (context->font_map, context, desc, language);
   metrics = get_base_metrics (current_fonts);
 
@@ -731,6 +811,8 @@ ns_pango_context_get_metrics (NsPangoContext               *context,
       language == context->language)
     context->metrics = ns_pango_font_metrics_ref (metrics);
 
+  metrics_cache_insert (context, desc, language, metrics);
+
   return metrics;
 }
 
@@ -742,6 +824,8 @@ context_changed (NsPangoContext *context)
     context->serial++;
 
   g_clear_pointer (&context->metrics, ns_pango_font_metrics_unref);
+  if (context->metrics_cache != NULL)
+    g_hash_table_remove_all (context->metrics_cache);
 }
 
 /**
@@ -775,7 +859,10 @@ check_fontmap_changed (NsPangoContext *context)
   context->fontmap_serial = ns_pango_font_map_get_serial (context->font_map);
 
   if (old_serial != context->fontmap_serial)
-    context_changed (context);
+    {
+      context_changed (context);
+      ns_pango_shape_cache_font_map_changed ();
+    }
 }
 
 /**

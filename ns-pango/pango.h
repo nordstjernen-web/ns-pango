@@ -49,6 +49,7 @@
 #include <ns-pango/pango-tabs.h>
 #include <ns-pango/pango-types.h>
 #include <ns-pango/pango-utils.h>
+#include <ns-pango/ns-pango-cache.h>
 #include <ns-pango/pango-version-macros.h>
 
 #endif /* __PANGO_H__ */

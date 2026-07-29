@@ -30,6 +30,7 @@
 
 #include "pango-item-private.h"
 #include "pango-font-private.h"
+#include "ns-shape-cache.h"
 
 #include <hb-ot.h>
 
@@ -613,7 +614,7 @@ fallback_shape (const char          *text,
 /* {{{ Shaping implementation */
 
 static void
-ns_pango_shape_internal (const char          *item_text,
+shape_internal_uncached (const char          *item_text,
                       int                  item_length,
                       const char          *paragraph_text,
                       int                  paragraph_length,
@@ -787,6 +788,72 @@ ns_pango_shape_internal (const char          *item_text,
             }
         }
     }
+}
+
+static void
+ns_pango_shape_internal (const char          *item_text,
+                      int                  item_length,
+                      const char          *paragraph_text,
+                      int                  paragraph_length,
+                      const NsPangoAnalysis *analysis,
+                      NsPangoLogAttr        *log_attrs,
+                      int                  num_chars,
+                      NsPangoGlyphString    *glyphs,
+                      NsPangoShapeFlags      flags)
+{
+  NsPangoShapeKey *key;
+  hb_feature_t features[32];
+  unsigned int num_features = 0;
+
+  if (item_length == -1)
+    item_length = strlen (item_text);
+
+  if (!paragraph_text)
+    {
+      paragraph_text = item_text;
+      paragraph_length = item_length;
+    }
+  if (paragraph_length == -1)
+    paragraph_length = strlen (paragraph_text);
+
+  if (!ns_pango_shape_cache_enabled () || analysis->font == NULL)
+    {
+      shape_internal_uncached (item_text, item_length,
+                               paragraph_text, paragraph_length,
+                               analysis, log_attrs, num_chars, glyphs, flags);
+      return;
+    }
+
+  ns_pango_analysis_collect_features (analysis, features,
+                                      G_N_ELEMENTS (features), &num_features);
+
+  key = ns_pango_shape_cache_key_new (analysis, item_text, item_length,
+                                      paragraph_text, paragraph_length,
+                                      flags,
+                                      find_show_flags (analysis),
+                                      find_text_transform (analysis),
+                                      features, num_features);
+
+  if (key != NULL &&
+      !ns_pango_shape_cache_verifying () &&
+      ns_pango_shape_cache_lookup (key, glyphs))
+    {
+      ns_pango_shape_cache_key_free (key);
+      return;
+    }
+
+  shape_internal_uncached (item_text, item_length,
+                           paragraph_text, paragraph_length,
+                           analysis, log_attrs, num_chars, glyphs, flags);
+
+  if (key == NULL)
+    return;
+
+  if (ns_pango_shape_cache_verifying () &&
+      !ns_pango_shape_cache_matches (key, glyphs))
+    g_warning ("shape cache mismatch on '%.*s'", item_length, item_text);
+
+  ns_pango_shape_cache_insert (key, glyphs);
 }
 
 /* }}} */

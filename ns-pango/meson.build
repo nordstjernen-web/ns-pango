@@ -28,6 +28,7 @@ ns_pango_sources = [
   'pango-utils.c',
   'reorder-items.c',
   'shape.c',
+  'ns-shape-cache.c',
   'serializer.c',
   'json/gtkjsonparser.c',
   'json/gtkjsonprinter.c',
@@ -61,6 +62,7 @@ ns_pango_headers = [
   'pango-tabs.h',
   'pango-types.h',
   'pango-utils.h',
+  'ns-pango-cache.h',
 ]
 
 ns_pango_installed_headers = ns_pango_headers + [ 'pango-version-macros.h' ]

@@ -1,7 +1,7 @@
-/* Pango
- * pango-context-private.h: Internal structures of NsPangoContext
+/* ns-pango
+ * ns-pango-cache.h: Control over the caches this fork adds.
  *
- * Copyright (C) 2004 Red Hat Software
+ * Copyright (C) 2026 Northstar contributors
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -19,39 +19,20 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_CONTEXT_PRIVATE_H__
-#define __PANGO_CONTEXT_PRIVATE_H__
+#ifndef __NS_PANGO_CACHE_H__
+#define __NS_PANGO_CACHE_H__
 
-#include <ns-pango/pango-context.h>
+#include <glib.h>
 
 G_BEGIN_DECLS
 
-struct _PangoContext
-{
-  GObject parent_instance;
-  guint serial;
-  guint fontmap_serial;
+void ns_pango_cache_clear     (void);
 
-  NsPangoLanguage *set_language;
-  NsPangoLanguage *language;
-  NsPangoDirection base_dir;
-  NsPangoGravity base_gravity;
-  NsPangoGravity resolved_gravity;
-  NsPangoGravityHint gravity_hint;
-
-  NsPangoFontDescription *font_desc;
-
-  NsPangoMatrix *matrix;
-
-  NsPangoFontMap *font_map;
-
-  NsPangoFontMetrics *metrics;
-  GHashTable *metrics_cache;
-
-  gboolean round_glyph_positions;
-};
+void ns_pango_cache_get_stats (guint64 *hits,
+                               guint64 *misses,
+                               guint64 *skipped,
+                               guint64 *entries);
 
 G_END_DECLS
 
-#endif /* __PANGO_CONTEXT_PRIVATE_H__ */
-
+#endif /* __NS_PANGO_CACHE_H__ */
