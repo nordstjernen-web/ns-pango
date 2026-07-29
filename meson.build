@@ -333,14 +333,6 @@ if build_pangoft2
   pango_deps += freetype_dep
 endif
 
-build_pangoxft = false
-xft_dep = dependency('xft', version: xft_req, required: get_option('xft'))
-if xft_dep.found() and fontconfig_dep.found() and freetype_dep.found()
-  pango_conf.set('HAVE_XFT', 1)
-  pango_deps += dependency('xrender', required: false)
-  pango_deps += xft_dep
-  build_pangoxft = true
-endif
 
 has_core_text = false
 if host_system == 'darwin' and subsystem == 'macos'
@@ -425,8 +417,6 @@ if cairo_dep.found()
 
   cairo_font_backends = [
     [ 'cairo-ft', cairo_req, 'HAVE_CAIRO_FREETYPE', 'freetype', ],
-    [ 'cairo-win32', cairo_req, 'HAVE_CAIRO_WIN32', 'win32', ],
-    [ 'cairo-quartz', cairo_req, 'HAVE_CAIRO_QUARTZ', 'quartz', ],
   ]
 
   if cairo_found_type == 'internal'
@@ -530,14 +520,9 @@ if cairo_dwrite_dep.found()
 endif
 
 # introspection
-gir = find_program('g-ir-scanner', required : get_option('introspection'))
 
-if not gir.found() and get_option('introspection').enabled()
-  error('Introspection enabled, but g-ir-scanner not found.')
-endif
 
-build_gir = gi_dep.found() and gir.found() and (get_option('introspection').enabled() or
-                                               (get_option('introspection').allowed() and get_option('documentation')))
+build_gir = false
 
 # libsysprof-capture support
 libsysprof_capture_dep = dependency('sysprof-capture-4',
@@ -565,23 +550,11 @@ root_inc = include_directories('.')
 pango_inc = include_directories('pango')
 
 subdir('pango')
-subdir('utils')
-subdir('tools')
-subdir('docs')
-if get_option('build-testsuite')
-  subdir('tests')
-endif
-if get_option('build-examples')
-  subdir('examples')
-endif
 
 if not meson.is_subproject()
-  meson.add_dist_script('build-aux/meson/dist-docs.py')
 endif
 
 summary('Fontconfig', pango_font_backends.contains('freetype'), section: 'Font backends')
-summary('DirectWrite', pango_font_backends.contains('win32'), section: 'Font backends')
-summary('CoreText', pango_font_backends.contains('quartz'), section: 'Font backends')
 
 summary('Cairo', cairo_dep.found(), section: 'Features')
 summary('Thai', thai_dep.found(), section: 'Features')
@@ -593,10 +566,6 @@ summary('Linker', cc.get_linker_id(), section: 'Toolchain')
 summary('Debugging', get_option('debug'), section: 'Build')
 summary('Optimization', get_option('optimization'), section: 'Build')
 summary('Introspection', build_gir, section: 'Build')
-summary('Documentation', get_option('documentation'), section: 'Build')
-summary('Man pages', get_option('man-pages'), section: 'Build')
-summary('Tests', get_option('build-testsuite'), section: 'Build')
-summary('Examples', get_option('build-examples'), section: 'Build')
 
 summary('prefix', pango_prefix, section: 'Directories')
 summary('includedir', pango_includedir, section: 'Directories')
