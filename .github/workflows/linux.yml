@@ -1,0 +1,167 @@
+name: linux
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest glib Northstar's CI builds against. ns-pango must keep
+          # compiling here: upstream Pango requires glib 2.88, this fork lowers
+          # the floor and relies on its own version guards instead.
+          - name: ubuntu-24.04 (gcc, oldest supported glib)
+            runs-on: ubuntu-24.04
+            cc: gcc
+          - name: ubuntu-latest (clang)
+            runs-on: ubuntu-latest
+            cc: clang
+
+    env:
+      CC: ${{ matrix.cc }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ${{ matrix.cc }} pkg-config meson ninja-build \
+            libglib2.0-dev libcairo2-dev libharfbuzz-dev libfribidi-dev \
+            libfontconfig-dev libfreetype-dev libthai-dev \
+            fonts-dejavu-core fonts-noto-cjk
+
+      - name: Report dependency versions
+        run: |
+          pkg-config --modversion glib-2.0 harfbuzz fribidi cairo fontconfig freetype2 \
+            | paste -d' ' - - - - - - \
+            | xargs printf 'glib=%s harfbuzz=%s fribidi=%s cairo=%s fontconfig=%s freetype=%s\n'
+
+      # The options Northstar's meson.build passes when it consumes this fork.
+      - name: Configure
+        run: |
+          meson setup builddir \
+            -Ddefault_library=static \
+            -Dfontconfig=enabled \
+            -Dfreetype=enabled \
+            -Dintrospection=disabled \
+            -Dsysprof=disabled \
+            -Dlibthai=auto
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Check the symbol prefixes
+        run: |
+          fail=0
+          for a in builddir/ns-pango/libns-pango-1.0.a \
+                   builddir/ns-pango/libns-pangocairo-1.0.a \
+                   builddir/ns-pango/libns-pangoft2-1.0.a; do
+            bare=$(nm -g --defined-only "$a" | grep -cE ' [TDBR] pango_' || true)
+            pre=$(nm -g --defined-only "$a" | grep -cE ' [TDBR] ns_pango_' || true)
+            echo "$(basename "$a"): unprefixed=$bare prefixed=$pre"
+            [ "$bare" -eq 0 ] || fail=1
+            [ "$pre" -gt 0 ] || fail=1
+          done
+          # An unprefixed pango_ symbol would collide with the system Pango that
+          # GTK loads into the same process, and GObject aborts when two
+          # libraries register one type name.
+          exit $fail
+
+      - name: Check the rename script is idempotent
+        run: |
+          python3 ns-rename.py
+          git diff --exit-code
+
+      # The cache must not change what shaping returns. Measure the same text
+      # with the cache serving it and with the cache off, and compare.
+      - name: Check the shape cache against uncached shaping
+        run: |
+          cat > /tmp/measure.c <<'EOF'
+          #include <ns-pango/pangocairo.h>
+          #include <stdio.h>
+
+          static int
+          measure (NsPangoContext *ctx, const char *text, const char *font)
+          {
+            NsPangoLayout *layout = ns_pango_layout_new (ctx);
+            NsPangoFontDescription *desc = ns_pango_font_description_from_string (font);
+            int width = 0;
+
+            ns_pango_layout_set_font_description (layout, desc);
+            ns_pango_layout_set_text (layout, text, -1);
+            ns_pango_layout_get_pixel_size (layout, &width, NULL);
+
+            ns_pango_font_description_free (desc);
+            g_object_unref (layout);
+
+            return width;
+          }
+
+          int
+          main (void)
+          {
+            const char *samples[] = {
+              "the quick brown fox jumps over the lazy dog",
+              "Handgloves 0123456789 punctuation, semicolons; dashes -- done",
+              "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d mixed english 123",
+              "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe3\x81\xae\xe3\x83\x86\xe3\x82\xad\xe3\x82\xb9\xe3\x83\x88",
+            };
+            const char *fonts[] = { "sans 16", "sans bold 11", "serif 22" };
+            NsPangoFontMap *map = ns_pango_cairo_font_map_get_default ();
+            NsPangoContext *ctx = ns_pango_font_map_create_context (map);
+            guint64 hits = 0, misses = 0, skipped = 0, entries = 0;
+
+            for (int pass = 0; pass < 2; pass++)
+              for (unsigned f = 0; f < G_N_ELEMENTS (fonts); f++)
+                for (unsigned s = 0; s < G_N_ELEMENTS (samples); s++)
+                  printf ("%s|%s|%d\n", fonts[f], samples[s],
+                          measure (ctx, samples[s], fonts[f]));
+
+            ns_pango_cache_get_stats (&hits, &misses, &skipped, &entries);
+            fprintf (stderr, "hits=%llu misses=%llu skipped=%llu entries=%llu\n",
+                     (unsigned long long) hits, (unsigned long long) misses,
+                     (unsigned long long) skipped, (unsigned long long) entries);
+
+            g_object_unref (ctx);
+
+            return 0;
+          }
+          EOF
+          $CC -O1 -o /tmp/measure /tmp/measure.c \
+            -I. -Ibuilddir -Ibuilddir/ns-pango \
+            builddir/ns-pango/libns-pangocairo-1.0.a \
+            builddir/ns-pango/libns-pangoft2-1.0.a \
+            builddir/ns-pango/libns-pango-1.0.a \
+            $(pkg-config --cflags --libs glib-2.0 gobject-2.0 gio-2.0 cairo \
+                harfbuzz fribidi fontconfig freetype2 libthai) -lm
+          /tmp/measure > /tmp/cached.txt
+          NS_PANGO_SHAPE_CACHE=0 /tmp/measure > /tmp/uncached.txt
+          NS_PANGO_SHAPE_CACHE=verify /tmp/measure > /tmp/verified.txt 2> /tmp/verify.log
+          cat /tmp/verify.log
+          diff -u /tmp/uncached.txt /tmp/cached.txt
+          diff -u /tmp/uncached.txt /tmp/verified.txt
+          if grep -q 'shape cache mismatch' /tmp/verify.log; then
+            echo "verification reported a mismatch" >&2
+            exit 1
+          fi
+          if [ "$(grep -c . /tmp/cached.txt)" -eq 0 ]; then
+            echo "measured nothing" >&2
+            exit 1
+          fi

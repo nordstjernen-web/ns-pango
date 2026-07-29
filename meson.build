@@ -209,7 +209,7 @@ endif
 ns_pango_deps = []
 
 glib_major_req = 2
-glib_minor_req = 88
+glib_minor_req = 80
 
 glib_req       = '>= @0@.@1@'.format(glib_major_req, glib_minor_req)
 gi_req         = '>= 1.83.2'
@@ -223,8 +223,6 @@ cairo_req      = '>= 1.18.0'
 add_project_arguments([
     '-DG_LOG_USE_STRUCTURED=1',
     '-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_@0@_@1@'.format(glib_major_req, glib_minor_req),
-    '-DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_@0@_@1@'.format(glib_major_req, glib_minor_req),
-
   ],
   language: 'c'
 )
