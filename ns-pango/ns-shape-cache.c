@@ -339,10 +339,22 @@ ns_pango_shape_cache_matches (const NsPangoShapeKey    *key,
   if (run->num_glyphs != glyphs->num_glyphs)
     return FALSE;
 
-  return memcmp (run->glyphs, glyphs->glyphs,
-                 run->num_glyphs * sizeof (NsPangoGlyphInfo)) == 0 &&
-         memcmp (run->log_clusters, glyphs->log_clusters,
-                 run->num_glyphs * sizeof (int)) == 0;
+  for (int i = 0; i < run->num_glyphs; i++)
+    {
+      const NsPangoGlyphInfo *a = &run->glyphs[i];
+      const NsPangoGlyphInfo *b = &glyphs->glyphs[i];
+
+      if (a->glyph != b->glyph ||
+          a->geometry.width != b->geometry.width ||
+          a->geometry.x_offset != b->geometry.x_offset ||
+          a->geometry.y_offset != b->geometry.y_offset ||
+          a->attr.is_cluster_start != b->attr.is_cluster_start ||
+          a->attr.is_color != b->attr.is_color ||
+          run->log_clusters[i] != glyphs->log_clusters[i])
+        return FALSE;
+    }
+
+  return TRUE;
 }
 
 void
