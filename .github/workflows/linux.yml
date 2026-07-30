@@ -167,5 +167,10 @@ jobs:
       - name: Check word-spacing against CSS
         run: builddir/tests/ns-text-check spacing
 
+      # Pango measures with HarfBuzz and draws with cairo, so a synthesised
+      # bold or oblique has to reach both of them.
+      - name: Check measured advances match drawn advances
+        run: builddir/tests/ns-text-check synthesis
+
       - name: Run the harness under the meson test runner
         run: meson test -C builddir --print-errorlogs

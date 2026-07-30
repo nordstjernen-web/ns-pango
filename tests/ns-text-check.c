@@ -35,12 +35,15 @@
  *   ns-text-check threads [n]     dump the corpus from n threads at once and
  *                                 check they all agree with a lone thread
  *   ns-text-check spacing         check word-spacing against what CSS specifies
+ *   ns-text-check synthesis       check every family's advances agree between
+ *                                 HarfBuzz, which measures, and cairo, which draws
  */
 
 #include <ns-pango/pangocairo.h>
 #include <ns-pango/ns-pango-cache.h>
 
 #include <locale.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -439,6 +442,131 @@ do_spacing (NsPangoContext *context)
   return failed;
 }
 
+/* Pango takes advances from HarfBuzz and hands the glyphs to cairo to draw, so
+ * the two have to agree about how wide a glyph is. They stop agreeing as soon as
+ * something is synthesised -- fontconfig asking for an emboldened face, which is
+ * what CSS font-synthesis: weight comes down to -- because cairo applies the
+ * synthesis and HarfBuzz has to be told to. Where they disagree, the glyphs are
+ * drawn wider than the space they were measured into and the text sets too
+ * tight.
+ *
+ * Rather than name fonts that happen to lack a bold face, walk every family the
+ * fontmap has and check all of them, regular and bold.
+ */
+static gboolean
+advances_agree (NsPangoContext *context,
+                const char     *family,
+                gboolean        bold,
+                const char    **why)
+{
+  NsPangoFontMap *map = ns_pango_context_get_font_map (context);
+  NsPangoFontDescription *desc = ns_pango_font_description_new ();
+  NsPangoFont *font;
+  hb_font_t *hb_font;
+  cairo_scaled_font_t *scaled_font;
+  gboolean agree = TRUE;
+  /* Latin, Cyrillic, Greek, Hebrew, Arabic, Han, Hiragana, Hangul: enough that
+   * every family covers at least one of them.
+   */
+  static const gunichar probes[] = { 'H', 'n', 0x0416, 0x03A9, 0x05D0, 0x0627, 0x4E2D, 0x3042, 0xAC00 };
+
+  ns_pango_font_description_set_family (desc, family);
+  ns_pango_font_description_set_size (desc, 40 * NS_PANGO_SCALE);
+  if (bold)
+    ns_pango_font_description_set_weight (desc, NS_PANGO_WEIGHT_BOLD);
+
+  font = ns_pango_font_map_load_font (map, context, desc);
+  ns_pango_font_description_free (desc);
+
+  if (font == NULL)
+    return TRUE;
+
+  scaled_font = ns_pango_cairo_font_get_scaled_font ((NsPangoCairoFont *) font);
+  hb_font = ns_pango_font_get_hb_font (font);
+
+  if (scaled_font == NULL || hb_font == NULL)
+    {
+      g_object_unref (font);
+      return TRUE;
+    }
+
+  for (unsigned i = 0; i < G_N_ELEMENTS (probes) && agree; i++)
+    {
+      hb_codepoint_t glyph;
+      cairo_glyph_t cairo_glyph;
+      cairo_text_extents_t extents;
+      double from_hb;
+
+      if (!hb_font_get_nominal_glyph (hb_font, probes[i], &glyph))
+        continue;
+
+      cairo_glyph.index = glyph;
+      cairo_glyph.x = 0;
+      cairo_glyph.y = 0;
+      cairo_scaled_font_glyph_extents (scaled_font, &cairo_glyph, 1, &extents);
+
+      from_hb = hb_font_get_glyph_h_advance (hb_font, glyph) / (double) NS_PANGO_SCALE;
+
+      /* They are not expected to match exactly. cairo hints the advance to a
+       * whole pixel where FreeType is hinting, which Pango reproduces by
+       * rounding what HarfBuzz gives it, and FreeType computes its embolden
+       * strength in 26.6 and truncates. Together that is under two thirds of a
+       * pixel. A synthesis applied on one side and not the other is a 24th of
+       * the em, which at this size is more than two pixels.
+       */
+      if (fabs (from_hb - extents.x_advance) > 1.0)
+        {
+          static char detail[256];
+
+          g_snprintf (detail, sizeof detail,
+                      "U+%04X: HarfBuzz %.3f px, cairo %.3f px",
+                      probes[i], from_hb, extents.x_advance);
+          *why = detail;
+          agree = FALSE;
+        }
+    }
+
+  g_object_unref (font);
+
+  return agree;
+}
+
+static int
+do_synthesis (NsPangoContext *context)
+{
+  NsPangoFontFamily **families = NULL;
+  int n_families = 0;
+  int failed = 0;
+  int checked = 0;
+
+  ns_pango_font_map_list_families (ns_pango_context_get_font_map (context),
+                                  &families, &n_families);
+
+  for (int i = 0; i < n_families; i++)
+    {
+      const char *family = ns_pango_font_family_get_name (families[i]);
+
+      for (int bold = 0; bold < 2; bold++)
+        {
+          const char *why = NULL;
+
+          checked++;
+          if (!advances_agree (context, family, bold != 0, &why))
+            {
+              printf ("%s%s: %s\n", family, bold ? " bold" : "", why);
+              failed = 1;
+            }
+        }
+    }
+
+  g_free (families);
+
+  printf ("checked %d family and weight combinations: %s\n", checked,
+          failed ? "some disagree" : "HarfBuzz and cairo agree");
+
+  return failed;
+}
+
 static double
 elapsed_ms (GTimer *timer)
 {
@@ -521,9 +649,12 @@ main (int    argc,
     status = do_threads (context, argc > 2 ? MAX (atoi (argv[2]), 1) : 8);
   else if (strcmp (command, "spacing") == 0)
     status = do_spacing (context);
+  else if (strcmp (command, "synthesis") == 0)
+    status = do_synthesis (context);
   else
     {
-      fprintf (stderr, "usage: %s [dump|bench [iterations]|threads [count]|spacing]\n", argv[0]);
+      fprintf (stderr, "usage: %s [dump|bench [iterations]|threads [count]|spacing|synthesis]\n",
+               argv[0]);
       status = 2;
     }
 

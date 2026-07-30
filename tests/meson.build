@@ -25,3 +25,6 @@ test('threads', ns_text_check, args: [ 'threads', '8' ], timeout: 240)
 
 # word-spacing has to put space exactly where CSS Text says it goes.
 test('spacing', ns_text_check, args: [ 'spacing' ], timeout: 60)
+
+# Whatever is synthesised, HarfBuzz measures what cairo draws.
+test('synthesis', ns_text_check, args: [ 'synthesis' ], timeout: 120)

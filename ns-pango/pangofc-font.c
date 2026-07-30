@@ -945,11 +945,13 @@ ns_pango_fc_font_create_hb_font (NsPangoFont *font)
   double pixel_size;
   double point_size;
   double slant G_GNUC_UNUSED;
+  double embolden G_GNUC_UNUSED;
 
   x_scale_inv = y_scale_inv = 1.0;
   pixel_size = 1.0;
   point_size = 1.0;
   slant = 0.0;
+  embolden = 0.0;
 
   key = _ns_pango_fc_font_get_font_key (fc_font);
   if (key)
@@ -959,8 +961,21 @@ ns_pango_fc_font_create_hb_font (NsPangoFont *font)
       NsPangoMatrix font_matrix;
       NsPangoGravity gravity;
       FcMatrix fc_matrix, *fc_matrix_val;
+      FcBool fc_embolden;
       double x, y;
       int i;
+
+      /* Fontconfig asks for a bold face to be synthesised when the family has
+       * none, which is what CSS calls font-synthesis: weight, and cairo obliges
+       * with FT_GlyphSlot_Embolden. FreeType grows the advance by a 24th of the
+       * em along with the outline; HarfBuzz has to be told to do the same, or
+       * the glyphs are drawn wider than the advances they were measured with and
+       * synthesised bold text sets too tight -- touching, in CJK, where the
+       * glyphs already fill the em box.
+       */
+      if (FcPatternGetBool (pattern, FC_EMBOLDEN, 0, &fc_embolden) == FcResultMatch &&
+          fc_embolden)
+        embolden = 1.0 / 24.0;
 
       ctm = ns_pango_fc_font_key_get_matrix (key);
       ns_pango_matrix_get_font_scale_factors (ctm, &x_scale_inv, &y_scale_inv);
@@ -1003,6 +1018,10 @@ ns_pango_fc_font_create_hb_font (NsPangoFont *font)
 
 #if HB_VERSION_ATLEAST (3, 3, 0)
   hb_font_set_synthetic_slant (hb_font, slant);
+#endif
+
+#if HB_VERSION_ATLEAST (7, 0, 0)
+  hb_font_set_synthetic_bold (hb_font, embolden, embolden, FALSE);
 #endif
 
   if (key)
