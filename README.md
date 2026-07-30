@@ -6,7 +6,7 @@ A fork of [Pango](https://gitlab.gnome.org/GNOME/pango) for the
 engine. It is not a drop-in replacement for Pango and is not meant to be
 installed system-wide; Northstar consumes it as a pinned meson subproject.
 
-Three things differ from upstream.
+Five things differ from upstream.
 
 **A cross-layout shaping cache.** Upstream keeps nothing that outlives a
 `PangoLayout`, so a browser that measures a run and then paints it hands
@@ -14,10 +14,15 @@ the same bytes to HarfBuzz twice, and a table cell is shaped for
 `min-content`, for `max-content` and again to lay out. `ns-shape-cache.c`
 keeps the finished glyph string in a process-wide hash keyed on everything
 `hb_shape` reads, and only for runs whose shaping cannot depend on the text
-around them. `pango_context_get_metrics` is likewise cached per font
-description rather than only for the context's own. Set
-`NS_PANGO_SHAPE_CACHE=0` to disable the cache, or `=verify` to shape both
-ways and warn on any difference.
+around them — which includes runs ending at a hyphenated break, and CJK,
+where there is no whitespace to key off but ideographs, kana and Hangul
+syllables neither join nor ligate. A full cache drops the entries nothing
+has read since the last sweep rather than clearing outright.
+`pango_context_get_metrics` is likewise cached per font description rather
+than only for the context's own, bounded, and dropped when the fontmap
+changes. Set `NS_PANGO_SHAPE_CACHE=0` to disable the cache, or `=verify` to
+shape both ways and warn on any difference; `NS_PANGO_CACHE_DEBUG=1`
+reports why runs were not cached.
 
 **Every symbol is renamed** — `ns_pango_*`, `NsPango*`, `NS_PANGO_*`,
 `NS_TYPE_PANGO_*`, and headers under `ns-pango/`. GTK loads the system
@@ -26,11 +31,36 @@ registers a type name it already holds. `ns-rename.py` performs the whole
 rewrite and is idempotent, so run it after merging upstream instead of
 editing by hand.
 
+**CSS properties upstream cannot express.** `word-spacing` had no route
+through Pango at all: letter spacing goes between every grapheme, so the
+nearest a browser could get was an attribute per separator character, which
+splits the paragraph into an item per word. `NS_PANGO_ATTR_WORD_SPACING`
+and `ns_pango_glyph_item_word_space` add the space to the advance of each
+word-separator character, at the seven characters CSS Text names and
+nowhere else.
+
+**Fixes for what a browser hits and a widget toolkit does not.** The font
+metrics recursion guard was one process-wide flag, so two threads laying
+out the same paragraph could break its lines differently — Northstar shapes
+off the main thread. A synthesised bold face was measured with HarfBuzz's
+unbolded advances and drawn with FreeType's bolded ones, so
+`font-synthesis: weight` set too tight, worst in CJK.
+
 **Backends and tooling a browser never links are gone**: Xft,
 Win32/DirectWrite, CoreText, the deprecated `pango_ot_*` API, layout
-serialization, FT2 rendering, the test suite, examples, utilities,
-documentation and GObject-introspection. What remains is the core text
-layer with the cairo and fontconfig/FreeType backends.
+serialization, FT2 rendering and its fontmap, the test suite, examples,
+utilities, documentation and GObject-introspection. What remains is the
+core text layer with the cairo and fontconfig/FreeType backends.
+
+What replaces the test suite is `tests/ns-text-check`, built with
+`-Dbuild-testsuite=true`. `dump` prints every glyph of every run of every
+line for a corpus of scripts and wrapping modes, so CI can diff shaping
+with the cache serving, off and verifying; `threads` checks that threads
+sharing the cache agree with a thread on its own; `spacing` checks
+word-spacing against CSS; `synthesis` checks that every family's advances
+agree between HarfBuzz, which measures, and cairo, which draws; and
+`bench` times laying a paragraph out and measuring it the way intrinsic
+sizing does.
 
 Upstream's own description follows.
 
