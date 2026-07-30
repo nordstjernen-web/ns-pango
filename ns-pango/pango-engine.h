@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_ENGINE_H__
-#define __PANGO_ENGINE_H__
+#ifndef __NS_PANGO_ENGINE_H__
+#define __NS_PANGO_ENGINE_H__
 
 #include <ns-pango/pango-types.h>
 #include <ns-pango/pango-item.h>
@@ -454,4 +454,4 @@ prefix ## _register_type (GTypeModule *module)				  \
 
 G_END_DECLS
 
-#endif /* __PANGO_ENGINE_H__ */
+#endif /* __NS_PANGO_ENGINE_H__ */

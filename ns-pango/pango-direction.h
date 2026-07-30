@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_DIRECTION_H__
-#define __PANGO_DIRECTION_H__
+#ifndef __NS_PANGO_DIRECTION_H__
+#define __NS_PANGO_DIRECTION_H__
 
 #include <glib.h>
 
@@ -69,4 +69,4 @@ typedef enum {
 
 G_END_DECLS
 
-#endif /* __PANGO_DIRECTION_H__ */
+#endif /* __NS_PANGO_DIRECTION_H__ */

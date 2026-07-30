@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_H__
-#define __PANGO_H__
+#ifndef __NS_PANGO_H__
+#define __NS_PANGO_H__
 
 #include <ns-pango/pango-attributes.h>
 #include <ns-pango/pango-bidi-type.h>
@@ -52,4 +52,4 @@
 #include <ns-pango/ns-pango-cache.h>
 #include <ns-pango/pango-version-macros.h>
 
-#endif /* __PANGO_H__ */
+#endif /* __NS_PANGO_H__ */

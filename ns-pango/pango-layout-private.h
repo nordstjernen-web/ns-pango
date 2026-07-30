@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_LAYOUT_PRIVATE_H__
-#define __PANGO_LAYOUT_PRIVATE_H__
+#ifndef __NS_PANGO_LAYOUT_PRIVATE_H__
+#define __NS_PANGO_LAYOUT_PRIVATE_H__
 
 #include <ns-pango/pango-layout.h>
 
@@ -157,4 +157,4 @@ void     _ns_pango_layout_iter_destroy (NsPangoLayoutIter *iter);
 
 G_END_DECLS
 
-#endif /* __PANGO_LAYOUT_PRIVATE_H__ */
+#endif /* __NS_PANGO_LAYOUT_PRIVATE_H__ */

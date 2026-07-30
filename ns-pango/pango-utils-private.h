@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_UTILS_PRIVATE_H__
-#define __PANGO_UTILS_PRIVATE_H__
+#ifndef __NS_PANGO_UTILS_PRIVATE_H__
+#define __NS_PANGO_UTILS_PRIVATE_H__
 
 #include <stdio.h>
 #include <glib.h>
@@ -63,4 +63,4 @@ void ns_pango_log2vis_fill_embedding_levels (const char     *text,
 
 G_END_DECLS
 
-#endif /* __PANGO_UTILS_PRIATE_H__ */
+#endif /* __NS_PANGO_UTILS_PRIATE_H__ */

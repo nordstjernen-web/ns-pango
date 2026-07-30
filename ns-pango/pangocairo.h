@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGOCAIRO_H__
-#define __PANGOCAIRO_H__
+#ifndef __NS_PANGOCAIRO_H__
+#define __NS_PANGOCAIRO_H__
 
 #include <ns-pango/pango.h>
 #include <cairo.h>
@@ -224,4 +224,4 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (NsPangoCairoFontMap, g_object_unref)
 
 G_END_DECLS
 
-#endif /* __PANGOCAIRO_H__ */
+#endif /* __NS_PANGOCAIRO_H__ */

@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_FONTSET_SIMPLE_PRIVATE_H__
-#define __PANGO_FONTSET_SIMPLE_PRIVATE_H__
+#ifndef __NS_PANGO_FONTSET_SIMPLE_PRIVATE_H__
+#define __NS_PANGO_FONTSET_SIMPLE_PRIVATE_H__
 
 #include <ns-pango/pango-fontset-simple.h>
 
@@ -41,4 +41,4 @@ struct _PangoFontsetSimpleClass
 
 G_END_DECLS
 
-#endif /* __PANGO_FONTSET_SIMPLE_PRIVATE_H__ */
+#endif /* __NS_PANGO_FONTSET_SIMPLE_PRIVATE_H__ */

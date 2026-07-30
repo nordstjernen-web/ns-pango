@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_LAYOUT_H__
-#define __PANGO_LAYOUT_H__
+#ifndef __NS_PANGO_LAYOUT_H__
+#define __NS_PANGO_LAYOUT_H__
 
 #include <ns-pango/pango-attributes.h>
 #include <ns-pango/pango-context.h>
@@ -485,5 +485,5 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (NsPangoLayoutLine, ns_pango_layout_line_unref)
 
 G_END_DECLS
 
-#endif /* __PANGO_LAYOUT_H__ */
+#endif /* __NS_PANGO_LAYOUT_H__ */
 

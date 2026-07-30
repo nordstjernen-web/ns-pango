@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_BIDI_TYPE_H__
-#define __PANGO_BIDI_TYPE_H__
+#ifndef __NS_PANGO_BIDI_TYPE_H__
+#define __NS_PANGO_BIDI_TYPE_H__
 
 #include <glib.h>
 
@@ -114,4 +114,4 @@ gboolean       ns_pango_get_mirror_char        (gunichar     ch,
 
 G_END_DECLS
 
-#endif /* __PANGO_BIDI_TYPE_H__ */
+#endif /* __NS_PANGO_BIDI_TYPE_H__ */

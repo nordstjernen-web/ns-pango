@@ -20,8 +20,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_IMPL_UTILS_H__
-#define __PANGO_IMPL_UTILS_H__
+#ifndef __NS_PANGO_IMPL_UTILS_H__
+#define __NS_PANGO_IMPL_UTILS_H__
 
 #include <glib.h>
 #include <glib-object.h>
@@ -281,4 +281,4 @@ ns_pango_parse_variations (const char            *variations,
 
 G_END_DECLS
 
-#endif /* __PANGO_IMPL_UTILS_H__ */
+#endif /* __NS_PANGO_IMPL_UTILS_H__ */

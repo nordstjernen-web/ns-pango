@@ -19,6 +19,17 @@ SKIP_FILES = {os.path.basename(__file__)}
 
 P = 'p' + 'ango'
 RULES = (
+    # Include guards, and the __PANGO_H_INSIDE__ single-include sentinel. These
+    # have to be renamed for the same reason the symbols do, only the failure is
+    # at compile time rather than at type registration: a translation unit that
+    # includes both this fork and the system Pango -- which is any file in a GTK
+    # application that also talks to this fork -- gets whichever header comes
+    # first, and the second one silently expands to nothing because its guard is
+    # already defined. The rule below has to come before the bare PANGO_ rule,
+    # whose negative lookbehind deliberately skips anything preceded by an
+    # underscore.
+    (re.compile(r'(?<![A-Za-z0-9_])__%s([A-Z0-9_]*__)' % P.upper()),
+     '__NS_%s\\1' % P.upper()),
     (re.compile(r'#include\s*<%s/' % P), '#include <ns-pango/'),
     (re.compile(r'#include\s*"%s/' % P), '#include "ns-pango/'),
     (re.compile(r'(?<![A-Za-z0-9_])%sCAIRO_BACKEND' % P.upper()),

@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_ATTRIBUTES_H__
-#define __PANGO_ATTRIBUTES_H__
+#ifndef __NS_PANGO_ATTRIBUTES_H__
+#define __NS_PANGO_ATTRIBUTES_H__
 
 #include <ns-pango/pango-font.h>
 #include <ns-pango/pango-color.h>
@@ -754,4 +754,4 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(NsPangoAttrIterator, ns_pango_attr_iterator_destro
 
 G_END_DECLS
 
-#endif /* __PANGO_ATTRIBUTES_H__ */
+#endif /* __NS_PANGO_ATTRIBUTES_H__ */

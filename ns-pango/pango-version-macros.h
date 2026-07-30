@@ -17,8 +17,8 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef __PANGO_VERSION_H__
-#define __PANGO_VERSION_H__
+#ifndef __NS_PANGO_VERSION_H__
+#define __NS_PANGO_VERSION_H__
 
 #include <ns-pango/pango-features.h>
 
@@ -881,5 +881,5 @@
 # define NS_PANGO_AVAILABLE_ENUMERATOR_IN_1_58
 #endif
 
-#endif /* __PANGO_VERSION_H__ */
+#endif /* __NS_PANGO_VERSION_H__ */
 

@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_MODULES_H__
-#define __PANGO_MODULES_H__
+#ifndef __NS_PANGO_MODULES_H__
+#define __NS_PANGO_MODULES_H__
 
 #include <ns-pango/pango-engine.h>
 
@@ -81,4 +81,4 @@ void           ns_pango_module_register (NsPangoIncludedModule *module);
 
 G_END_DECLS
 
-#endif /* __PANGO_MODULES_H__ */
+#endif /* __NS_PANGO_MODULES_H__ */

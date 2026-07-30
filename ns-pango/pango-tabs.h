@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_TABS_H__
-#define __PANGO_TABS_H__
+#ifndef __NS_PANGO_TABS_H__
+#define __NS_PANGO_TABS_H__
 
 #include <ns-pango/pango-types.h>
 
@@ -114,4 +114,4 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(NsPangoTabArray, ns_pango_tab_array_free)
 
 G_END_DECLS
 
-#endif /* __PANGO_TABS_H__ */
+#endif /* __NS_PANGO_TABS_H__ */

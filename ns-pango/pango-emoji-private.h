@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_EMOJI_PRIVATE_H__
-#define __PANGO_EMOJI_PRIVATE_H__
+#ifndef __NS_PANGO_EMOJI_PRIVATE_H__
+#define __NS_PANGO_EMOJI_PRIVATE_H__
 
 #include <glib.h>
 
@@ -59,4 +59,4 @@ _ns_pango_emoji_iter_next (NsPangoEmojiIter *iter);
 void
 _ns_pango_emoji_iter_fini (NsPangoEmojiIter *iter);
 
-#endif /* __PANGO_EMOJI_PRIVATE_H__ */
+#endif /* __NS_PANGO_EMOJI_PRIVATE_H__ */

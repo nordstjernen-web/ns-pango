@@ -18,8 +18,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_ITEM_PRIVATE_H__
-#define __PANGO_ITEM_PRIVATE_H__
+#ifndef __NS_PANGO_ITEM_PRIVATE_H__
+#define __NS_PANGO_ITEM_PRIVATE_H__
 
 #include <ns-pango/pango-item.h>
 #include <ns-pango/pango-break.h>
@@ -117,4 +117,4 @@ void               ns_pango_item_unsplit                 (NsPangoItem *orig,
 
 G_END_DECLS
 
-#endif /* __PANGO_ITEM_PRIVATE_H__ */
+#endif /* __NS_PANGO_ITEM_PRIVATE_H__ */

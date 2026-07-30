@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_COVERAGE_H__
-#define __PANGO_COVERAGE_H__
+#ifndef __NS_PANGO_COVERAGE_H__
+#define __NS_PANGO_COVERAGE_H__
 
 #include <glib-object.h>
 
@@ -105,4 +105,4 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(NsPangoCoverage, g_object_unref)
 
 G_END_DECLS
 
-#endif /* __PANGO_COVERAGE_H__ */
+#endif /* __NS_PANGO_COVERAGE_H__ */

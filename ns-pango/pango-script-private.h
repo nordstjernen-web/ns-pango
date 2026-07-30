@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_SCRIPT_PRIVATE_H__
-#define __PANGO_SCRIPT_PRIVATE_H__
+#ifndef __NS_PANGO_SCRIPT_PRIVATE_H__
+#define __NS_PANGO_SCRIPT_PRIVATE_H__
 
 #define PAREN_STACK_DEPTH 128
 
@@ -53,4 +53,4 @@ _ns_pango_script_iter_init (NsPangoScriptIter *iter,
 void
 _ns_pango_script_iter_fini (NsPangoScriptIter *iter);
 
-#endif /* __PANGO_SCRIPT_PRIVATE_H__ */
+#endif /* __NS_PANGO_SCRIPT_PRIVATE_H__ */

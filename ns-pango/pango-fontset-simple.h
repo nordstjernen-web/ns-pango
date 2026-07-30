@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_FONTSET_SIMPLE_H__
-#define __PANGO_FONTSET_SIMPLE_H__
+#ifndef __NS_PANGO_FONTSET_SIMPLE_H__
+#define __NS_PANGO_FONTSET_SIMPLE_H__
 
 #include <ns-pango/pango-coverage.h>
 #include <ns-pango/pango-types.h>
@@ -62,4 +62,4 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (NsPangoFontsetSimple, g_object_unref)
 
 G_END_DECLS
 
-#endif /* __PANGO_FONTSET_SIMPLE_H__ */
+#endif /* __NS_PANGO_FONTSET_SIMPLE_H__ */

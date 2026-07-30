@@ -20,8 +20,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGOFC_PRIVATE_H__
-#define __PANGOFC_PRIVATE_H__
+#ifndef __NS_PANGOFC_PRIVATE_H__
+#define __NS_PANGOFC_PRIVATE_H__
 
 #include <pangofc-fontmap-private.h>
 
@@ -83,4 +83,4 @@ NsPangoLanguage **_ns_pango_fc_font_map_get_languages (NsPangoFcFontMap *fcfontm
 
 G_END_DECLS
 
-#endif /* __PANGOFC_PRIVATE_H__ */
+#endif /* __NS_PANGOFC_PRIVATE_H__ */

@@ -17,8 +17,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_ATTRIBUTES_PRIVATE_H__
-#define __PANGO_ATTRIBUTES_PRIVATE_H__
+#ifndef __NS_PANGO_ATTRIBUTES_PRIVATE_H__
+#define __NS_PANGO_ATTRIBUTES_PRIVATE_H__
 
 struct _PangoAttrIterator
 {

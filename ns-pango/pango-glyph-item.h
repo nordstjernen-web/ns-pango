@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_GLYPH_ITEM_H__
-#define __PANGO_GLYPH_ITEM_H__
+#ifndef __NS_PANGO_GLYPH_ITEM_H__
+#define __NS_PANGO_GLYPH_ITEM_H__
 
 #include <ns-pango/pango-attributes.h>
 #include <ns-pango/pango-break.h>
@@ -179,4 +179,4 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (NsPangoGlyphItem, ns_pango_glyph_item_free)
 
 G_END_DECLS
 
-#endif /* __PANGO_GLYPH_ITEM_H__ */
+#endif /* __NS_PANGO_GLYPH_ITEM_H__ */

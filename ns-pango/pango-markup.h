@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_MARKUP_H__
-#define __PANGO_MARKUP_H__
+#ifndef __NS_PANGO_MARKUP_H__
+#define __NS_PANGO_MARKUP_H__
 
 #include <ns-pango/pango-attributes.h>
 
@@ -49,4 +49,4 @@ gboolean               ns_pango_parse_markup        (const char            *mark
 
 G_END_DECLS
 
-#endif /* __PANGO_MARKUP_H__ */
+#endif /* __NS_PANGO_MARKUP_H__ */

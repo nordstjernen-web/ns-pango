@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_FONTMAP_H__
-#define __PANGO_FONTMAP_H__
+#ifndef __NS_PANGO_FONTMAP_H__
+#define __NS_PANGO_FONTMAP_H__
 
 #include <ns-pango/pango-types.h>
 #include <ns-pango/pango-font.h>
@@ -140,4 +140,4 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(NsPangoFontMap, g_object_unref)
 
 G_END_DECLS
 
-#endif /* __PANGO_FONTMAP_H__ */
+#endif /* __NS_PANGO_FONTMAP_H__ */

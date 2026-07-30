@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_UTILS_INTERNAL_H__
-#define __PANGO_UTILS_INTERNAL_H__
+#ifndef __NS_PANGO_UTILS_INTERNAL_H__
+#define __NS_PANGO_UTILS_INTERNAL_H__
 
 #include <stdio.h>
 #include <glib.h>
@@ -49,4 +49,4 @@ gboolean ns_pango_parse_width (const char *str,
 
 G_END_DECLS
 
-#endif /* __PANGO_UTILS_H__ */
+#endif /* __NS_PANGO_UTILS_H__ */

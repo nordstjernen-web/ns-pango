@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_SCRIPT_H__
-#define __PANGO_SCRIPT_H__
+#ifndef __NS_PANGO_SCRIPT_H__
+#define __NS_PANGO_SCRIPT_H__
 
 #include <glib-object.h>
 
@@ -334,4 +334,4 @@ NsPangoLanguage *ns_pango_script_get_sample_language (NsPangoScript    script) G
 
 G_END_DECLS
 
-#endif /* __PANGO_SCRIPT_H__ */
+#endif /* __NS_PANGO_SCRIPT_H__ */

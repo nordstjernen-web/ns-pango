@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_COLOR_H__
-#define __PANGO_COLOR_H__
+#ifndef __NS_PANGO_COLOR_H__
+#define __NS_PANGO_COLOR_H__
 
 #include <ns-pango/pango-types.h>
 #include <glib-object.h>
@@ -73,4 +73,4 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (NsPangoColor, ns_pango_color_free)
 
 G_END_DECLS
 
-#endif /* __PANGO_COLOR_H__ */
+#endif /* __NS_PANGO_COLOR_H__ */

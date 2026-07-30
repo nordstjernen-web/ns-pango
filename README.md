@@ -39,12 +39,22 @@ and `ns_pango_glyph_item_word_space` add the space to the advance of each
 word-separator character, at the seven characters CSS Text names and
 nowhere else.
 
-**Fixes for what a browser hits and a widget toolkit does not.** The font
-metrics recursion guard was one process-wide flag, so two threads laying
-out the same paragraph could break its lines differently — Northstar shapes
-off the main thread. A synthesised bold face was measured with HarfBuzz's
-unbolded advances and drawn with FreeType's bolded ones, so
-`font-synthesis: weight` set too tight, worst in CJK.
+**Fixes for what a browser hits and a widget toolkit does not.** A synthesised
+bold face was measured with HarfBuzz's unbolded advances and drawn with
+FreeType's bolded ones, so `font-synthesis: weight` set too tight, worst in
+CJK, where the glyphs already fill the em box.
+
+**Concurrency the library now survives, though Northstar does not yet use it.**
+Northstar calls into this library only from each renderer process's main loop —
+its parallelism is processes, not threads — so these are latent wins rather
+than wins today. The font metrics recursion guard was one process-wide flag,
+so two threads laying out the same paragraph broke its lines differently.
+`shape.c` kept one HarfBuzz buffer for the whole process behind a trylock, so
+every thread but one allocated a buffer per run; each thread has its own now,
+which is worth a few percent even single-threaded. The shape cache takes a
+reader-writer lock, so warm lookups no longer serialise. On four cores, layout
+throughput with the cache serving scales 3.2x where it scaled 2.4x. See
+`docs/northstar-integration.md` for how the browser actually drives this.
 
 **Backends and tooling a browser never links are gone**: Xft,
 Win32/DirectWrite, CoreText, the deprecated `pango_ot_*` API, layout

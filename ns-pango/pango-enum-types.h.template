@@ -1,6 +1,6 @@
 /*** BEGIN file-header ***/
-#ifndef __PANGO_ENUM_TYPES_H__
-#define __PANGO_ENUM_TYPES_H__
+#ifndef __NS_PANGO_ENUM_TYPES_H__
+#define __NS_PANGO_ENUM_TYPES_H__
 
 #include <glib-object.h>
 
@@ -23,5 +23,5 @@ GType @enum_name@_get_type (void) G_GNUC_CONST;
 /*** BEGIN file-tail ***/
 G_END_DECLS
 
-#endif /* __PANGO_ENUM_TYPES_H__ */
+#endif /* __NS_PANGO_ENUM_TYPES_H__ */
 /*** END file-tail ***/

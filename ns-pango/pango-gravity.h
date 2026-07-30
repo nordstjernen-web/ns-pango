@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_GRAVITY_H__
-#define __PANGO_GRAVITY_H__
+#ifndef __NS_PANGO_GRAVITY_H__
+#define __NS_PANGO_GRAVITY_H__
 
 #include <glib.h>
 
@@ -134,4 +134,4 @@ NsPangoGravity ns_pango_gravity_get_for_script_and_width
 
 G_END_DECLS
 
-#endif /* __PANGO_GRAVITY_H__ */
+#endif /* __NS_PANGO_GRAVITY_H__ */

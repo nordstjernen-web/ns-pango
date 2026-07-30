@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_FONTMAP_PRIVATE_H__
-#define __PANGO_FONTMAP_PRIVATE_H__
+#ifndef __NS_PANGO_FONTMAP_PRIVATE_H__
+#define __NS_PANGO_FONTMAP_PRIVATE_H__
 
 #include <ns-pango/pango-font-private.h>
 #include <ns-pango/pango-fontset.h>
@@ -46,4 +46,4 @@ const char   *ns_pango_font_map_get_shape_engine_type (NsPangoFontMap *fontmap);
 
 G_END_DECLS
 
-#endif /* __PANGO_FONTMAP_PRIVATE_H__ */
+#endif /* __NS_PANGO_FONTMAP_PRIVATE_H__ */

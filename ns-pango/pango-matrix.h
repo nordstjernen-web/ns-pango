@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGO_MATRIX_H__
-#define __PANGO_MATRIX_H__
+#ifndef __NS_PANGO_MATRIX_H__
+#define __NS_PANGO_MATRIX_H__
 
 #include <glib.h>
 #include <glib-object.h>
@@ -128,4 +128,4 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (NsPangoMatrix, ns_pango_matrix_free)
 
 G_END_DECLS
 
-#endif /* __PANGO_MATRIX_H__ */
+#endif /* __NS_PANGO_MATRIX_H__ */

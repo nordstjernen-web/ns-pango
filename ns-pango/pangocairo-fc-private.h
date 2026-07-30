@@ -19,8 +19,8 @@
  * Boston, MA 02111-1307, USA.
  */
 
-#ifndef __PANGOCAIRO_FC_PRIVATE_H__
-#define __PANGOCAIRO_FC_PRIVATE_H__
+#ifndef __NS_PANGOCAIRO_FC_PRIVATE_H__
+#define __NS_PANGOCAIRO_FC_PRIVATE_H__
 
 #include <ns-pango/pangofc-fontmap-private.h>
 #include <ns-pango/pangocairo-fc.h>
@@ -41,5 +41,5 @@ NsPangoFcFont *_ns_pango_cairo_fc_font_new (NsPangoCairoFcFontMap *cffontmap,
 
 G_END_DECLS
 
-#endif /* __PANGOCAIRO_FC_PRIVATE_H__ */
+#endif /* __NS_PANGOCAIRO_FC_PRIVATE_H__ */
 
