@@ -37,40 +37,44 @@
 /* {{{ Harfbuzz shaping */
 /* {{{ Buffer handling */
 
-static hb_buffer_t *cached_buffer = NULL; /* MT-safe */
-G_LOCK_DEFINE_STATIC (cached_buffer);
+/* One buffer per thread that shapes, rather than one for the whole process
+ * behind a trylock. Upstream's single buffer means every thread but the one
+ * holding it creates and destroys a buffer for every run it shapes, and a
+ * browser shapes off the main thread -- so on four threads three of them paid an
+ * allocation, and the internal arrays HarfBuzz had already grown, per run.
+ *
+ * The buffer is taken out of the private on acquire and put back on release, so
+ * a shape nested inside another on the same thread finds nothing there and makes
+ * its own, exactly as it did when it lost the trylock.
+ */
+static void
+destroy_thread_buffer (gpointer data)
+{
+  hb_buffer_destroy (data);
+}
+
+static GPrivate thread_buffer = G_PRIVATE_INIT (destroy_thread_buffer);
 
 static hb_buffer_t *
-acquire_buffer (gboolean *free_buffer)
+acquire_buffer (void)
 {
-  hb_buffer_t *buffer;
+  hb_buffer_t *buffer = g_private_get (&thread_buffer);
 
-  if (G_LIKELY (G_TRYLOCK (cached_buffer)))
-    {
-      if (G_UNLIKELY (!cached_buffer))
-        cached_buffer = hb_buffer_create ();
+  if (G_UNLIKELY (buffer == NULL))
+    return hb_buffer_create ();
 
-      buffer = cached_buffer;
-      *free_buffer = FALSE;
-    }
-  else
-    {
-      buffer = hb_buffer_create ();
-      *free_buffer = TRUE;
-    }
+  g_private_set (&thread_buffer, NULL);
 
   return buffer;
 }
 
 static void
-release_buffer (hb_buffer_t *buffer,
-                gboolean     free_buffer)
+release_buffer (hb_buffer_t *buffer)
 {
-  if (G_LIKELY (!free_buffer))
-    {
-      hb_buffer_reset (buffer);
-      G_UNLOCK (cached_buffer);
-    }
+  hb_buffer_reset (buffer);
+
+  if (G_LIKELY (g_private_get (&thread_buffer) == NULL))
+    g_private_set (&thread_buffer, buffer);
   else
     hb_buffer_destroy (buffer);
 }
@@ -411,7 +415,6 @@ ns_pango_hb_shape (const char          *item_text,
   hb_font_t *hb_font;
   hb_buffer_t *hb_buffer;
   hb_direction_t hb_direction;
-  gboolean free_buffer;
   hb_glyph_info_t *hb_glyph;
   hb_glyph_position_t *hb_position;
   int last_cluster;
@@ -429,7 +432,7 @@ ns_pango_hb_shape (const char          *item_text,
 
   context.show_flags = find_show_flags (analysis);
   hb_font = ns_pango_font_get_hb_font_for_context (analysis->font, &context);
-  hb_buffer = acquire_buffer (&free_buffer);
+  hb_buffer = acquire_buffer ();
 
   transform = find_text_transform (analysis);
 
@@ -584,7 +587,7 @@ ns_pango_hb_shape (const char          *item_text,
         hb_position++;
       }
 
-  release_buffer (hb_buffer, free_buffer);
+  release_buffer (hb_buffer);
   hb_font_destroy (hb_font);
 }
 

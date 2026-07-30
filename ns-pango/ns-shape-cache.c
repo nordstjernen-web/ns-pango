@@ -68,13 +68,20 @@ struct _NsPangoShapeKey
 typedef struct
 {
   int               num_glyphs;
-  gboolean          read;
+  gint              read;      /* set by readers, so atomic */
   NsPangoGlyphInfo *glyphs;
   int              *log_clusters;
 } CachedRun;
 
 static GHashTable *shape_cache;
-G_LOCK_DEFINE_STATIC (shape_cache);
+
+/* Once the cache is warm almost every visit is a lookup, and a lookup only
+ * reads the table -- so readers run concurrently and only the writers, which are
+ * the inserts and the eviction sweeps, take the table exclusively. With one
+ * plain mutex the memcpy of every cached glyph string was serialised across all
+ * the threads a browser shapes on.
+ */
+static GRWLock shape_cache_lock;
 static gsize cache_bytes;
 
 /* Diagnostics only, so counters that may wrap are good enough. They are
@@ -399,23 +406,24 @@ ns_pango_shape_cache_lookup (const NsPangoShapeKey *key,
   if (key == NULL)
     return FALSE;
 
-  G_LOCK (shape_cache);
+  g_rw_lock_reader_lock (&shape_cache_lock);
 
   run = shape_cache != NULL ? g_hash_table_lookup (shape_cache, key) : NULL;
   if (run == NULL)
     {
-      G_UNLOCK (shape_cache);
+      g_rw_lock_reader_unlock (&shape_cache_lock);
       g_atomic_int_inc (&cache_misses);
       return FALSE;
     }
 
   /* Marking the entry is what lets eviction keep the working set: a sweep drops
-   * only what nothing has asked for since the previous sweep.
+   * only what nothing has asked for since the previous sweep. Several readers
+   * can be marking at once, hence the atomic.
    */
-  run->read = TRUE;
+  g_atomic_int_set (&run->read, TRUE);
   copy_run_to_glyphs (run, glyphs);
 
-  G_UNLOCK (shape_cache);
+  g_rw_lock_reader_unlock (&shape_cache_lock);
 
   g_atomic_int_inc (&cache_hits);
 
@@ -431,18 +439,18 @@ ns_pango_shape_cache_matches (const NsPangoShapeKey    *key,
   if (key == NULL)
     return TRUE;
 
-  G_LOCK (shape_cache);
+  g_rw_lock_reader_lock (&shape_cache_lock);
 
   run = shape_cache != NULL ? g_hash_table_lookup (shape_cache, key) : NULL;
   if (run == NULL)
     {
-      G_UNLOCK (shape_cache);
+      g_rw_lock_reader_unlock (&shape_cache_lock);
       return TRUE;
     }
 
   if (run->num_glyphs != glyphs->num_glyphs)
     {
-      G_UNLOCK (shape_cache);
+      g_rw_lock_reader_unlock (&shape_cache_lock);
       return FALSE;
     }
 
@@ -459,17 +467,17 @@ ns_pango_shape_cache_matches (const NsPangoShapeKey    *key,
           a->attr.is_color != b->attr.is_color ||
           run->log_clusters[i] != glyphs->log_clusters[i])
         {
-          G_UNLOCK (shape_cache);
+          g_rw_lock_reader_unlock (&shape_cache_lock);
           return FALSE;
         }
     }
 
-  G_UNLOCK (shape_cache);
+  g_rw_lock_reader_unlock (&shape_cache_lock);
 
   return TRUE;
 }
 
-/* Both of these run with the lock held. */
+/* Both of these run with the table held for writing. */
 
 static void
 drop_unread_entries (void)
@@ -538,7 +546,7 @@ ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
       return;
     }
 
-  G_LOCK (shape_cache);
+  g_rw_lock_writer_lock (&shape_cache_lock);
 
   if (G_UNLIKELY (shape_cache == NULL))
     shape_cache = g_hash_table_new_full (key_hash, key_equal, key_free, run_free);
@@ -561,19 +569,19 @@ ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
 
   g_hash_table_replace (shape_cache, key, run);
 
-  G_UNLOCK (shape_cache);
+  g_rw_lock_writer_unlock (&shape_cache_lock);
 }
 
 void
 ns_pango_cache_clear (void)
 {
-  G_LOCK (shape_cache);
+  g_rw_lock_writer_lock (&shape_cache_lock);
 
   if (shape_cache != NULL)
     g_hash_table_remove_all (shape_cache);
   cache_bytes = 0;
 
-  G_UNLOCK (shape_cache);
+  g_rw_lock_writer_unlock (&shape_cache_lock);
 }
 
 void
@@ -594,9 +602,9 @@ ns_pango_cache_get_stats (guint64 *hits,
 
   if (entries)
     {
-      G_LOCK (shape_cache);
+      g_rw_lock_reader_lock (&shape_cache_lock);
       *entries = shape_cache != NULL ? g_hash_table_size (shape_cache) : 0;
-      G_UNLOCK (shape_cache);
+      g_rw_lock_reader_unlock (&shape_cache_lock);
     }
 
   if (g_getenv ("NS_PANGO_CACHE_DEBUG") != NULL)
