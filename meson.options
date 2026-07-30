@@ -37,3 +37,8 @@ option('freetype',
        type : 'feature',
        value : 'auto',
        description : 'Build with freetype support')
+
+option('nordstjernen',
+       type: 'boolean',
+       value: false,
+       description: 'Tune the static libraries for embedding in Nordstjernen')

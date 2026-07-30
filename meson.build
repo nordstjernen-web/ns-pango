@@ -1,12 +1,14 @@
 project('ns-pango', 'c',
         version: '1.58.0',
-        license: 'LGPLv2.1+',
+        license: 'LGPL-2.1-or-later',
+        license_files: 'COPYING',
         default_options: [
-          'buildtype=debugoptimized',
-          'warning_level=1',
-          'c_std=gnu11',
+          'buildtype=release',
+          'warning_level=2',
+          'c_std=gnu17',
+          'b_ndebug=if-release',
         ],
-        meson_version : '>= 1.2.0')
+        meson_version: '>=1.2.0')
 
 add_project_arguments([
     '-D_POSIX_C_SOURCE=200809L',
@@ -52,9 +54,10 @@ ns_pango_osxversion = [osx_current, '@0@.@1@.0'.format(osx_current, ns_pango_int
 cc = meson.get_compiler('c')
 host_system = host_machine.system()
 subsystem = ''
+cc_argument_syntax = cc.get_argument_syntax()
 
 if host_system == 'windows'
-  add_project_arguments('-D_WIN32_WINNT=_WIN32_WINNT_WIN10', language: 'c')
+  add_project_arguments('-D_WIN32_WINNT=0x0A00', language: 'c')
 elif host_system == 'darwin'
   subsystem = host_machine.subsystem()
 endif
@@ -64,17 +67,15 @@ common_cflags = []
 common_ldflags = []
 
 # Add more compiler warnings to the default set
-if cc.get_id() == 'msvc'
+if cc_argument_syntax == 'msvc'
   # Compiler options taken from msvc_recommended_pragmas.h
   # in GLib, based on _Win32_Programming_ by Rector and Newcomer
   test_cflags = ['-FImsvc_recommended_pragmas.h', '-utf-8']
   add_project_arguments(cc.get_supported_arguments(test_cflags), language: 'c')
   test_c_only_flags = []
-elif cc.get_id() == 'gcc' or cc.get_id() == 'clang'
+elif cc_argument_syntax == 'gcc'
   test_c_only_flags = [
-    '-Wno-c++11-extensions',
     '-Wno-missing-include-dirs',
-    '-Wno-typedef-redefinition',
     '-Wduplicated-branches',
     '-Wduplicated-cond',
     '-Wformat=2',
@@ -146,7 +147,7 @@ elif cc.get_id() == 'gcc' or cc.get_id() == 'clang'
     '-Werror=empty-body',
     '-Werror=write-strings',
     '-Werror=unused-but-set-variable',
-    '-Wundef', # FIXME: https://bugzilla.gnome.org/show_bug.cgi?id=792481
+    '-Wundef',
   ]
 
   if host_system == 'windows'
@@ -164,7 +165,7 @@ if get_option('default_library') != 'static'
   if host_system == 'windows'
     ns_pango_conf.set('DLL_EXPORT', true)
     ns_pango_conf.set('_PANGO_EXTERN', '__declspec(dllexport) extern')
-    if cc.get_id() != 'msvc'
+    if cc_argument_syntax != 'msvc'
       test_cflags += ['-fvisibility=hidden']
     endif
   else
@@ -174,17 +175,52 @@ if get_option('default_library') != 'static'
 endif
 
 # Check all compiler flags
-common_cflags += cc.get_supported_arguments(test_cflags)
+deduplicated_cflags = []
+foreach cflag: test_cflags
+  if not deduplicated_cflags.contains(cflag)
+    deduplicated_cflags += cflag
+  endif
+endforeach
+common_cflags += cc.get_supported_arguments(deduplicated_cflags)
+
+ns_pango_optimized = get_option('optimization') in ['2', '3', 's']
+ns_pango_optimization_cflags = []
+if ns_pango_optimized
+  if cc_argument_syntax == 'msvc'
+    ns_pango_optimization_cflags += cc.get_supported_arguments(['/Gy', '/Gw'])
+  else
+    ns_pango_optimization_cflags += cc.get_supported_arguments([
+      '-ffunction-sections',
+      '-fdata-sections',
+    ])
+    if get_option('nordstjernen') and host_system == 'linux'
+      ns_pango_optimization_cflags += cc.get_supported_arguments([
+        '-fno-semantic-interposition',
+        '-fno-plt',
+      ])
+    endif
+  endif
+endif
+common_cflags += ns_pango_optimization_cflags
 
 # Linker flags
 if host_machine.system() == 'linux'
   common_ldflags += cc.get_supported_link_arguments([ '-Wl,-Bsymbolic', '-Wl,-z,relro', '-Wl,-z,now', ])
 endif
+if ns_pango_optimized
+  if cc_argument_syntax == 'msvc'
+    common_ldflags += cc.get_supported_link_arguments(['/OPT:REF', '/OPT:ICF'])
+  elif host_system == 'darwin'
+    common_ldflags += cc.get_supported_link_arguments('-Wl,-dead_strip')
+  else
+    common_ldflags += cc.get_supported_link_arguments('-Wl,--gc-sections')
+  endif
+endif
 
 # Use debug/optimization flags to determine whether to enable debug or disable
 # cast checks
 ns_pango_debug_cflags = []
-if get_option('debug')
+if get_option('debug') and get_option('b_ndebug') != 'true'
   ns_pango_debug_cflags = [ '-DNS_PANGO_ENABLE_DEBUG' ]
   message('Enabling various debug infrastructure')
 elif get_option('optimization') in ['2', '3', 's']
@@ -436,6 +472,8 @@ summary('Linker', cc.get_linker_id(), section: 'Toolchain')
 
 summary('Debugging', get_option('debug'), section: 'Build')
 summary('Optimization', get_option('optimization'), section: 'Build')
+summary('Link-time optimization', get_option('b_lto'), section: 'Build')
+summary('Nordstjernen integration', get_option('nordstjernen'), section: 'Build')
 summary('Introspection', build_gir, section: 'Build')
 
 summary('prefix', ns_pango_prefix, section: 'Directories')
