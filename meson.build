@@ -554,6 +554,9 @@ ns_pango_inc = include_directories('ns-pango')
 
 subdir('ns-pango')
 
+if get_option('build-testsuite')
+  subdir('tests')
+endif
 
 summary('Fontconfig', ns_pango_font_backends.contains('freetype'), section: 'Font backends')
 

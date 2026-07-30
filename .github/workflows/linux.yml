@@ -63,6 +63,7 @@ jobs:
             -Dintrospection=disabled \
             -Dsysprof=disabled \
             -Dlibthai=auto \
+            -Dbuild-testsuite=true \
             --wrap-mode=nofallback
 
       - name: Build
@@ -90,79 +91,36 @@ jobs:
           python3 ns-rename.py
           git diff --exit-code
 
-      # The cache must not change what shaping returns. Measure the same text
-      # with the cache serving it and with the cache off, and compare.
+      # The caches must not change a single glyph. tests/ns-text-check dumps
+      # every glyph of every run of every line for a corpus that covers the
+      # scripts and the wrapping modes the cache's admission rule reasons about,
+      # and the three dumps have to be byte for byte identical.
       - name: Check the shape cache against uncached shaping
         run: |
-          cat > /tmp/measure.c <<'EOF'
-          #include <ns-pango/pangocairo.h>
-          #include <stdio.h>
-
-          static int
-          measure (NsPangoContext *ctx, const char *text, const char *font)
-          {
-            NsPangoLayout *layout = ns_pango_layout_new (ctx);
-            NsPangoFontDescription *desc = ns_pango_font_description_from_string (font);
-            int width = 0;
-
-            ns_pango_layout_set_font_description (layout, desc);
-            ns_pango_layout_set_text (layout, text, -1);
-            ns_pango_layout_get_pixel_size (layout, &width, NULL);
-
-            ns_pango_font_description_free (desc);
-            g_object_unref (layout);
-
-            return width;
-          }
-
-          int
-          main (void)
-          {
-            const char *samples[] = {
-              "the quick brown fox jumps over the lazy dog",
-              "Handgloves 0123456789 punctuation, semicolons; dashes -- done",
-              "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d mixed english 123",
-              "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe3\x81\xae\xe3\x83\x86\xe3\x82\xad\xe3\x82\xb9\xe3\x83\x88",
-            };
-            const char *fonts[] = { "sans 16", "sans bold 11", "serif 22" };
-            NsPangoFontMap *map = ns_pango_cairo_font_map_get_default ();
-            NsPangoContext *ctx = ns_pango_font_map_create_context (map);
-            guint64 hits = 0, misses = 0, skipped = 0, entries = 0;
-
-            for (int pass = 0; pass < 2; pass++)
-              for (unsigned f = 0; f < G_N_ELEMENTS (fonts); f++)
-                for (unsigned s = 0; s < G_N_ELEMENTS (samples); s++)
-                  printf ("%s|%s|%d\n", fonts[f], samples[s],
-                          measure (ctx, samples[s], fonts[f]));
-
-            ns_pango_cache_get_stats (&hits, &misses, &skipped, &entries);
-            fprintf (stderr, "hits=%llu misses=%llu skipped=%llu entries=%llu\n",
-                     (unsigned long long) hits, (unsigned long long) misses,
-                     (unsigned long long) skipped, (unsigned long long) entries);
-
-            g_object_unref (ctx);
-
-            return 0;
-          }
-          EOF
-          $CC -O1 -o /tmp/measure /tmp/measure.c \
-            -I. -Ibuilddir -Ibuilddir/ns-pango \
-            builddir/ns-pango/libns-pangocairo-1.0.a \
-            builddir/ns-pango/libns-pangoft2-1.0.a \
-            builddir/ns-pango/libns-pango-1.0.a \
-            $(pkg-config --cflags --libs glib-2.0 gobject-2.0 gio-2.0 cairo \
-                harfbuzz fribidi fontconfig freetype2 libthai) -lm
-          /tmp/measure > /tmp/cached.txt
-          NS_PANGO_SHAPE_CACHE=0 /tmp/measure > /tmp/uncached.txt
-          NS_PANGO_SHAPE_CACHE=verify /tmp/measure > /tmp/verified.txt 2> /tmp/verify.log
-          cat /tmp/verify.log
+          check=builddir/tests/ns-text-check
+          $check dump > /tmp/cached.txt 2> /tmp/cached.log
+          NS_PANGO_SHAPE_CACHE=0 $check dump > /tmp/uncached.txt 2> /tmp/uncached.log
+          NS_PANGO_SHAPE_CACHE=verify $check dump > /tmp/verified.txt 2> /tmp/verify.log
+          NS_PANGO_CACHE_DEBUG=1 $check dump > /dev/null 2> /tmp/skips.log
+          cat /tmp/cached.log /tmp/skips.log
           diff -u /tmp/uncached.txt /tmp/cached.txt
           diff -u /tmp/uncached.txt /tmp/verified.txt
           if grep -q 'shape cache mismatch' /tmp/verify.log; then
             echo "verification reported a mismatch" >&2
             exit 1
           fi
-          if [ "$(grep -c . /tmp/cached.txt)" -eq 0 ]; then
-            echo "measured nothing" >&2
+          if [ "$(grep -c . /tmp/cached.txt)" -lt 1000 ]; then
+            echo "the dump is too short to have measured the corpus" >&2
             exit 1
           fi
+          # The cache is pointless if it never serves anything, so a change that
+          # quietly stops it caching should fail here rather than just get
+          # slower.
+          hits=$(sed -n 's/.*hits=\([0-9]*\).*/\1/p' /tmp/cached.log)
+          if [ "${hits:-0}" -lt 1000 ]; then
+            echo "the cache served only $hits runs" >&2
+            exit 1
+          fi
+
+      - name: Run the harness under the meson test runner
+        run: meson test -C builddir --print-errorlogs

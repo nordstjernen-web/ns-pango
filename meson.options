@@ -21,9 +21,9 @@ option('introspection',
        description: 'Build the introspection data (requires gobject-introspection)')
 
 option('build-testsuite',
-       description : 'Build the test suite',
+       description : 'Build tests/ns-text-check, the shaping equivalence and timing harness',
        type: 'boolean',
-       value: true)
+       value: false)
 
 option('build-examples',
        description : 'Build example test programs',
