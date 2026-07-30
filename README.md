@@ -54,7 +54,7 @@ every thread but one allocated a buffer per run; each thread has its own now,
 which is worth a few percent even single-threaded. The shape cache takes a
 reader-writer lock, so warm lookups no longer serialise. On four cores, layout
 throughput with the cache serving scales 3.2x where it scaled 2.4x. See
-`docs/northstar-integration.md` for how the browser actually drives this.
+`NORTHSTAR-INTEGRATION.md` for how the browser actually drives this.
 
 **Backends and tooling a browser never links are gone**: Xft,
 Win32/DirectWrite, CoreText, the deprecated `pango_ot_*` API, layout
