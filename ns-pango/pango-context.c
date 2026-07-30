@@ -764,7 +764,6 @@ metrics_cache_make_room (NsPangoContext *context)
 {
   GHashTableIter iter;
   gpointer k, v;
-  gboolean freed = FALSE;
 
   if (g_hash_table_size (context->metrics_cache) < METRICS_CACHE_MAX_ENTRIES)
     return;
@@ -777,16 +776,14 @@ metrics_cache_make_room (NsPangoContext *context)
       if (key->read)
         key->read = FALSE;
       else
-        {
-          g_hash_table_iter_remove (&iter);
-          freed = TRUE;
-        }
+        g_hash_table_iter_remove (&iter);
     }
 
-  /* Everything in it is in use. Nothing here is a better thing to drop than
-   * anything else, so start over.
+  /* As in the shape cache: a sweep walks the whole table, so it has to buy
+   * enough room to be worth repeating. If it did not, everything in here is in
+   * use and none of it is a better thing to drop than the rest.
    */
-  if (!freed)
+  if (g_hash_table_size (context->metrics_cache) >= METRICS_CACHE_MAX_ENTRIES / 2)
     g_hash_table_remove_all (context->metrics_cache);
 }
 

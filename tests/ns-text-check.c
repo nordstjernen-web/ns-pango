@@ -85,6 +85,9 @@ static const Sample samples[] = {
   { "cjk-latin",      "日本語ABCテキスト123中文" },
   { "nbsp",           "no break space and figure space" },
   { "ideographic-sp", "日本　語　テキスト" },
+  { "kana-marks",     "コーヒーとビール 時々 ヶ月 プ\u309Bヴぁ" },
+  { "hangul-jamo",    "\u1100\u1161\u11A8 한국 \u1112\u1161\u11AB" },
+  { "fullwidth",      "ＡＢＣ１２３ｱｲｳ 混在" },
   { "combining",      "éàôü Å ñ combining" },
   { "zwj-emoji",      "\U0001f469‍\U0001f4bb \U0001f3f4\U000e0067 \U0001f1f3\U0001f1f4 ok" },
   { "varsel",         "✈️ ❤️ 1️⃣ text" },
@@ -125,6 +128,11 @@ static const Mode modes[] = {
   { "spacing",   130, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 2, 0 },
   { "word-space", 130, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0, 4 },
   { "both-space", 130, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 2, 3 },
+  /* Word spacing has to survive the passes that rewrite a finished line. */
+  { "word-justify", 140, NS_PANGO_WRAP_WORD,     NS_PANGO_ELLIPSIZE_NONE,   TRUE,  0, 4 },
+  { "word-ellipsis", 100, NS_PANGO_WRAP_WORD,    NS_PANGO_ELLIPSIZE_END,    FALSE, 0, 4 },
+  { "word-negative", 130, NS_PANGO_WRAP_WORD,    NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0, -2 },
+  { "word-tabs",    -1, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0, 4 },
 };
 
 static NsPangoLayout *
@@ -453,6 +461,8 @@ do_spacing (NsPangoContext *context)
  * Rather than name fonts that happen to lack a bold face, walk every family the
  * fontmap has and check all of them, regular and bold.
  */
+static char detail[256];
+
 static gboolean
 advances_agree (NsPangoContext *context,
                 const char     *family,
@@ -516,8 +526,6 @@ advances_agree (NsPangoContext *context,
        */
       if (fabs (from_hb - extents.x_advance) > 1.0)
         {
-          static char detail[256];
-
           g_snprintf (detail, sizeof detail,
                       "U+%04X: HarfBuzz %.3f px, cairo %.3f px",
                       probes[i], from_hb, extents.x_advance);

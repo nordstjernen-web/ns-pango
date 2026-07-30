@@ -37,8 +37,9 @@
  * HarfBuzz is given the paragraph as pre- and post-context, so an item that
  * starts or ends mid-word may join, reorder or ligate across its own boundary.
  * A boundary is independent when the character on either side of it neither
- * joins nor ligates: any space character, or an ideograph, kana letter or
- * Hangul syllable, which are written without spaces and never join.
+ * joins nor ligates: most space characters, or an ideograph, kana letter or
+ * Hangul syllable, which are written without spaces and never join. See
+ * boundary_char() for what is deliberately left out of both of those.
  */
 
 #define NS_SHAPE_CACHE_MAX_ENTRIES 20000
@@ -153,8 +154,16 @@ isolated_ideograph (gunichar ch)
 static gboolean
 boundary_char (gunichar ch)
 {
-  /* Every space character, not only ASCII space: &nbsp; is everywhere in HTML,
-   * and U+3000 is the space CJK text uses when it uses one at all.
+  /* Two space characters are not boundaries, for the same reason CJK punctuation
+   * is not: U+3000 IDEOGRAPHIC SPACE is what a CJK font's contextual spacing
+   * features compress against a neighbour, and U+1680 OGHAM SPACE MARK draws a
+   * visible stem that Ogham fonts join to the letters either side of it.
+   */
+  if (ch == 0x3000 || ch == 0x1680)
+    return FALSE;
+
+  /* Any other space character, not only ASCII space: &nbsp; is everywhere in
+   * HTML, and the fixed-width spaces are common in typeset Latin text.
    */
   return ch == '\t' || ch == '\n' || ch == '\v' || ch == '\f' || ch == '\r' ||
          ch == 0x2028 || ch == 0x2029 ||
@@ -462,7 +471,7 @@ ns_pango_shape_cache_matches (const NsPangoShapeKey    *key,
 
 /* Both of these run with the lock held. */
 
-static gboolean
+static void
 drop_unread_entries (void)
 {
   GHashTableIter iter;
@@ -485,8 +494,6 @@ drop_unread_entries (void)
     }
 
   cache_bytes -= MIN (freed, cache_bytes);
-
-  return freed > 0;
 }
 
 static void
@@ -498,11 +505,18 @@ make_room (void)
 
   /* Dropping the lot is a cliff a browser hits mid-scroll: the next frame
    * reshapes every run on screen. Sweep away what has not been read since the
-   * last sweep instead, and clear outright only when that frees nothing --
-   * which means the whole cache is the working set and there is nothing better
-   * to throw away.
+   * last sweep instead.
    */
-  if (!drop_unread_entries ())
+  drop_unread_entries ();
+
+  /* A sweep walks the whole table, so it has to buy enough room to be worth
+   * repeating -- otherwise a working set that fills the cache would sweep once
+   * per insert. Getting under half the ceiling leaves at least that many inserts
+   * before the next sweep; failing that, the working set really is the whole
+   * cache and there is nothing better to throw away than all of it.
+   */
+  if (g_hash_table_size (shape_cache) >= NS_SHAPE_CACHE_MAX_ENTRIES / 2 ||
+      cache_bytes >= NS_SHAPE_CACHE_MAX_BYTES / 2)
     {
       g_hash_table_remove_all (shape_cache);
       cache_bytes = 0;
