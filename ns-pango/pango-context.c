@@ -56,6 +56,7 @@ struct _PangoContextClass
 
 static void ns_pango_context_finalize    (GObject       *object);
 static void context_changed           (NsPangoContext  *context);
+static void check_fontmap_changed     (NsPangoContext  *context);
 
 G_DEFINE_TYPE (NsPangoContext, ns_pango_context, G_TYPE_OBJECT)
 
@@ -689,10 +690,21 @@ update_metrics_from_items (NsPangoFontMetrics *metrics,
  * Returns: (transfer full): a `NsPangoFontMetrics` object. The caller must call
  *   [method@Pango.FontMetrics.unref] when finished using the object.
  */
+/* A browser resolving `line-height: normal` asks for metrics with the element's
+ * own font description, so the number of distinct descriptions one page can ask
+ * about is unbounded -- one per distinct font-size alone. The cache needs a
+ * ceiling, and not a ceiling that throws everything away, because a miss costs a
+ * fontset load plus an itemize and a shape of the language sample string. @read
+ * says the entry has been asked for since the last sweep, so a full cache drops
+ * what nothing wanted and keeps the working set.
+ */
+#define METRICS_CACHE_MAX_ENTRIES 512
+
 typedef struct
 {
   NsPangoFontDescription *desc;
   NsPangoLanguage *language;
+  gboolean read;
 } MetricsKey;
 
 static guint
@@ -730,14 +742,52 @@ metrics_cache_lookup (NsPangoContext               *context,
                       NsPangoLanguage              *language)
 {
   MetricsKey key;
+  gpointer found_key, value;
 
   if (context->metrics_cache == NULL)
     return NULL;
 
   key.desc = (NsPangoFontDescription *) desc;
   key.language = language;
+  key.read = FALSE;
 
-  return g_hash_table_lookup (context->metrics_cache, &key);
+  if (!g_hash_table_lookup_extended (context->metrics_cache, &key, &found_key, &value))
+    return NULL;
+
+  ((MetricsKey *) found_key)->read = TRUE;
+
+  return value;
+}
+
+static void
+metrics_cache_make_room (NsPangoContext *context)
+{
+  GHashTableIter iter;
+  gpointer k, v;
+  gboolean freed = FALSE;
+
+  if (g_hash_table_size (context->metrics_cache) < METRICS_CACHE_MAX_ENTRIES)
+    return;
+
+  g_hash_table_iter_init (&iter, context->metrics_cache);
+  while (g_hash_table_iter_next (&iter, &k, &v))
+    {
+      MetricsKey *key = k;
+
+      if (key->read)
+        key->read = FALSE;
+      else
+        {
+          g_hash_table_iter_remove (&iter);
+          freed = TRUE;
+        }
+    }
+
+  /* Everything in it is in use. Nothing here is a better thing to drop than
+   * anything else, so start over.
+   */
+  if (!freed)
+    g_hash_table_remove_all (context->metrics_cache);
 }
 
 static void
@@ -754,9 +804,12 @@ metrics_cache_insert (NsPangoContext               *context,
                                                     metrics_key_free,
                                                     (GDestroyNotify) ns_pango_font_metrics_unref);
 
+  metrics_cache_make_room (context);
+
   key = g_new (MetricsKey, 1);
   key->desc = ns_pango_font_description_copy (desc);
   key->language = language;
+  key->read = FALSE;
 
   g_hash_table_replace (context->metrics_cache, key,
                         ns_pango_font_metrics_ref (metrics));
@@ -774,6 +827,13 @@ ns_pango_context_get_metrics (NsPangoContext               *context,
   GList *items;
 
   g_return_val_if_fail (NS_PANGO_IS_CONTEXT (context), NULL);
+
+  /* A font arriving in the fontmap -- a web font finishing loading, say --
+   * changes what these metrics are. Nothing else on this path noticed, so a
+   * caller asking only for metrics kept getting the pre-webfont answer until
+   * something happened to ask the context for its serial.
+   */
+  check_fontmap_changed (context);
 
   if (!desc)
     desc = context->font_desc;

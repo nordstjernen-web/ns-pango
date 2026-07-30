@@ -67,7 +67,7 @@ struct _NsPangoShapeKey
 typedef struct
 {
   int               num_glyphs;
-  guint             generation;
+  gboolean          read;
   NsPangoGlyphInfo *glyphs;
   int              *log_clusters;
 } CachedRun;
@@ -75,7 +75,6 @@ typedef struct
 static GHashTable *shape_cache;
 G_LOCK_DEFINE_STATIC (shape_cache);
 static gsize cache_bytes;
-static guint cache_generation = 1;
 
 /* Diagnostics only, so counters that may wrap are good enough. They are
  * atomic rather than plain because every thread that shapes writes them, and a
@@ -401,10 +400,10 @@ ns_pango_shape_cache_lookup (const NsPangoShapeKey *key,
       return FALSE;
     }
 
-  /* Stamping the entry is what lets eviction keep the working set: a sweep
-   * drops only what nothing has asked for since the previous sweep.
+  /* Marking the entry is what lets eviction keep the working set: a sweep drops
+   * only what nothing has asked for since the previous sweep.
    */
-  run->generation = cache_generation;
+  run->read = TRUE;
   copy_run_to_glyphs (run, glyphs);
 
   G_UNLOCK (shape_cache);
@@ -464,7 +463,7 @@ ns_pango_shape_cache_matches (const NsPangoShapeKey    *key,
 /* Both of these run with the lock held. */
 
 static gboolean
-drop_untouched_entries (void)
+drop_unread_entries (void)
 {
   GHashTableIter iter;
   gpointer k, v;
@@ -476,7 +475,9 @@ drop_untouched_entries (void)
       const NsPangoShapeKey *key = k;
       CachedRun *run = v;
 
-      if (run->generation != cache_generation)
+      if (run->read)
+        run->read = FALSE;
+      else
         {
           freed += run_size (run, key->text_length);
           g_hash_table_iter_remove (&iter);
@@ -484,7 +485,6 @@ drop_untouched_entries (void)
     }
 
   cache_bytes -= MIN (freed, cache_bytes);
-  cache_generation++;
 
   return freed > 0;
 }
@@ -502,7 +502,7 @@ make_room (void)
    * which means the whole cache is the working set and there is nothing better
    * to throw away.
    */
-  if (!drop_untouched_entries ())
+  if (!drop_unread_entries ())
     {
       g_hash_table_remove_all (shape_cache);
       cache_bytes = 0;
@@ -537,7 +537,7 @@ ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
 
   run = g_new (CachedRun, 1);
   run->num_glyphs = glyphs->num_glyphs;
-  run->generation = cache_generation;
+  run->read = FALSE;
   run->glyphs = g_memdup2 (glyphs->glyphs,
                            glyphs->num_glyphs * sizeof (NsPangoGlyphInfo));
   run->log_clusters = g_memdup2 (glyphs->log_clusters,
