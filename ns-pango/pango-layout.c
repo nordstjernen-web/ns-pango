@@ -113,6 +113,7 @@ struct _ItemProperties
   guint oline_single   : 1;
   guint showing_space  : 1;
   gint            letter_spacing;
+  gint            word_spacing;
   gboolean        shape_set;
   NsPangoRectangle *shape_ink_rect;
   NsPangoRectangle *shape_logical_rect;
@@ -3746,6 +3747,18 @@ shape_run (NsPangoLayoutLine *line,
           glyphs->glyphs[glyphs->num_glyphs - 1].geometry.width += space_right;
         }
 
+      if (state->properties.word_spacing)
+        {
+          NsPangoGlyphItem glyph_item;
+
+          glyph_item.item = item;
+          glyph_item.glyphs = glyphs;
+
+          ns_pango_glyph_item_word_space (&glyph_item,
+                                         layout->text,
+                                         state->properties.word_spacing);
+        }
+
       if (state->last_tab.glyphs != NULL)
         {
           int w;
@@ -4716,6 +4729,7 @@ affects_itemization (NsPangoAttribute *attr,
     case NS_PANGO_ATTR_FONT_SCALE:
     /* These need to be constant across runs */
     case NS_PANGO_ATTR_LETTER_SPACING:
+    case NS_PANGO_ATTR_WORD_SPACING:
     case NS_PANGO_ATTR_SHAPE:
     case NS_PANGO_ATTR_RISE:
     case NS_PANGO_ATTR_BASELINE_SHIFT:
@@ -6924,6 +6938,7 @@ ns_pango_layout_get_item_properties (NsPangoItem      *item,
   properties->strikethrough = FALSE;
   properties->showing_space = FALSE;
   properties->letter_spacing = 0;
+  properties->word_spacing = 0;
   properties->shape_set = FALSE;
   properties->shape_ink_rect = NULL;
   properties->shape_logical_rect = NULL;
@@ -6982,6 +6997,10 @@ ns_pango_layout_get_item_properties (NsPangoItem      *item,
 
         case NS_PANGO_ATTR_LETTER_SPACING:
           properties->letter_spacing = ((NsPangoAttrInt *)attr)->value;
+          break;
+
+        case NS_PANGO_ATTR_WORD_SPACING:
+          properties->word_spacing = ((NsPangoAttrInt *)attr)->value;
           break;
 
         case NS_PANGO_ATTR_SHAPE:

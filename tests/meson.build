@@ -22,3 +22,6 @@ test('dump-verify', ns_text_check, args: [ 'dump' ], timeout: 240,
 # The shape cache is one table for the whole process and Northstar shapes off the
 # main thread, so threads sharing it must not see different glyphs.
 test('threads', ns_text_check, args: [ 'threads', '8' ], timeout: 240)
+
+# word-spacing has to put space exactly where CSS Text says it goes.
+test('spacing', ns_text_check, args: [ 'spacing' ], timeout: 60)

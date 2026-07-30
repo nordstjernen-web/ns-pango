@@ -800,6 +800,71 @@ ns_pango_glyph_item_letter_space (NsPangoGlyphItem *glyph_item,
     }
 }
 
+/* The word separators CSS Text names. Nothing else counts: CSS is explicit that
+ * word-spacing applies at these characters and at no other, so a tab or an
+ * ideographic space must not pick it up.
+ */
+static gboolean
+is_word_separator (gunichar ch)
+{
+  return ch == 0x0020 ||   /* SPACE */
+         ch == 0x00A0 ||   /* NO-BREAK SPACE */
+         ch == 0x1361 ||   /* ETHIOPIC WORDSPACE */
+         ch == 0x10100 ||  /* AEGEAN WORD SEPARATOR LINE */
+         ch == 0x10101 ||  /* AEGEAN WORD SEPARATOR DOT */
+         ch == 0x1039F ||  /* UGARITIC WORD DIVIDER */
+         ch == 0x103D0;    /* OLD PERSIAN WORD DIVIDER */
+}
+
+/**
+ * ns_pango_glyph_item_word_space:
+ * @glyph_item: a `NsPangoGlyphItem`
+ * @text: text that @glyph_item corresponds to
+ *   (glyph_item->item->offset is an offset from the
+ *   start of @text)
+ * @word_spacing: amount of space to add at each word
+ *   separator, in Pango units. May be negative.
+ *
+ * Adds spacing at the word separators in @glyph_item, to give
+ * the effect CSS `word-spacing` describes.
+ *
+ * The space goes onto the advance of the separator itself, so a
+ * line that ends on a separator loses it along with the
+ * separator's own width, and nothing is added at the edges of
+ * the run. Unlike [method@Pango.GlyphItem.letter_space], this
+ * leaves every other cluster alone.
+ *
+ * Since: 1.58
+ */
+void
+ns_pango_glyph_item_word_space (NsPangoGlyphItem *glyph_item,
+                                const char       *text,
+                                int               word_spacing)
+{
+  NsPangoGlyphItemIter iter;
+  NsPangoGlyphInfo *glyphs = glyph_item->glyphs->glyphs;
+  gboolean have_cluster;
+
+  if (word_spacing == 0)
+    return;
+
+  for (have_cluster = ns_pango_glyph_item_iter_init_start (&iter, glyph_item, text);
+       have_cluster;
+       have_cluster = ns_pango_glyph_item_iter_next_cluster (&iter))
+    {
+      if (!is_word_separator (g_utf8_get_char (text + iter.start_index)))
+        continue;
+
+      /* The last glyph of the cluster in logical order, whichever way the run
+       * runs -- the same glyph letter spacing would put its right-hand space on.
+       */
+      if (iter.start_glyph < iter.end_glyph) /* LTR */
+        glyphs[iter.end_glyph - 1].geometry.width += word_spacing;
+      else                                   /* RTL */
+        glyphs[iter.end_glyph + 1].geometry.width += word_spacing;
+    }
+}
+
 /**
  * ns_pango_glyph_item_get_logical_widths:
  * @glyph_item: a `NsPangoGlyphItem`

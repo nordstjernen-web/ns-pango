@@ -162,5 +162,10 @@ jobs:
           builddir/tests/ns-text-check threads 8
           NS_PANGO_SHAPE_CACHE=0 builddir/tests/ns-text-check threads 8
 
+      # word-spacing has to add space where CSS Text says it does and nowhere
+      # else, in every script and both directions.
+      - name: Check word-spacing against CSS
+        run: builddir/tests/ns-text-check spacing
+
       - name: Run the harness under the meson test runner
         run: meson test -C builddir --print-errorlogs

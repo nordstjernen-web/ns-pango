@@ -1090,6 +1090,42 @@ ns_pango_attr_letter_spacing_new (int letter_spacing)
 }
 
 /**
+ * ns_pango_attr_word_spacing_new:
+ * @word_spacing: amount of extra space to add at each word
+ *   separator, in Pango units. May be negative.
+ *
+ * Create a new word-spacing attribute.
+ *
+ * The space is added to the advance of each word separator
+ * character in the range, which is what CSS `word-spacing`
+ * asks for. The word separators are the ones CSS Text names:
+ * space, no-break space, Ethiopic wordspace, the two Aegean
+ * word separators, and the Ugaritic and Old Persian word
+ * dividers.
+ *
+ * Unlike letter spacing, this does not change how the text is
+ * shaped, and no space is added anywhere but at a separator.
+ *
+ * Return value: (transfer full): the newly allocated
+ *   `NsPangoAttribute`, which should be freed with
+ *   [method@Pango.Attribute.destroy]
+ *
+ * Since: 1.58
+ */
+NsPangoAttribute *
+ns_pango_attr_word_spacing_new (int word_spacing)
+{
+  static const NsPangoAttrClass klass = {
+    NS_PANGO_ATTR_WORD_SPACING,
+    ns_pango_attr_int_copy,
+    ns_pango_attr_int_destroy,
+    ns_pango_attr_int_equal
+  };
+
+  return ns_pango_attr_int_new (&klass, word_spacing);
+}
+
+/**
  * ns_pango_attr_shape_new_with_data:
  * @ink_rect: ink rectangle to assign to each character
  * @logical_rect: logical rectangle to assign to each character
@@ -1631,6 +1667,7 @@ ns_pango_attribute_as_int (NsPangoAttribute *attr)
     case NS_PANGO_ATTR_RISE:
     case NS_PANGO_ATTR_FALLBACK:
     case NS_PANGO_ATTR_LETTER_SPACING:
+    case NS_PANGO_ATTR_WORD_SPACING:
     case NS_PANGO_ATTR_GRAVITY:
     case NS_PANGO_ATTR_GRAVITY_HINT:
     case NS_PANGO_ATTR_FOREGROUND_ALPHA:
@@ -3102,6 +3139,10 @@ ns_pango_attr_list_from_string (const char *text)
 
         case NS_PANGO_ATTR_LETTER_SPACING:
           INT_ATTR(letter_spacing);
+          break;
+
+        case NS_PANGO_ATTR_WORD_SPACING:
+          INT_ATTR(word_spacing);
           break;
 
         case NS_PANGO_ATTR_UNDERLINE_COLOR:

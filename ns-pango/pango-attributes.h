@@ -82,6 +82,8 @@ typedef struct _PangoAttrFontFeatures NsPangoAttrFontFeatures;
  * @NS_PANGO_ATTR_BASELINE_SHIFT: baseline displacement ([struct@Pango.AttrInt]). Since 1.50
  * @NS_PANGO_ATTR_FONT_SCALE: font-relative size change ([struct@Pango.AttrInt]). Since 1.50
  * @NS_PANGO_ATTR_WIDTH: font width ([struct@Pango.AttrInt]). Since: 1.58
+ * @NS_PANGO_ATTR_WORD_SPACING: extra space at each word separator, as CSS
+ *   `word-spacing` specifies it ([struct@Pango.AttrInt]). Since: 1.58
  *
  * The `NsPangoAttrType` distinguishes between different types of attributes.
  *
@@ -131,6 +133,7 @@ typedef enum
   NS_PANGO_ATTR_BASELINE_SHIFT,    /* NsPangoAttrSize */
   NS_PANGO_ATTR_FONT_SCALE,        /* NsPangoAttrInt */
   NS_PANGO_ATTR_WIDTH,             /* NsPangoAttrInt */
+  NS_PANGO_ATTR_WORD_SPACING,      /* NsPangoAttrInt */
 } NsPangoAttrType;
 
 /**
@@ -568,6 +571,8 @@ NS_PANGO_AVAILABLE_IN_1_4
 NsPangoAttribute *        ns_pango_attr_fallback_new                 (gboolean                    enable_fallback);
 NS_PANGO_AVAILABLE_IN_1_6
 NsPangoAttribute *        ns_pango_attr_letter_spacing_new           (int                         letter_spacing);
+NS_PANGO_AVAILABLE_IN_1_58
+NsPangoAttribute *        ns_pango_attr_word_spacing_new             (int                         word_spacing);
 NS_PANGO_AVAILABLE_IN_ALL
 NsPangoAttribute *        ns_pango_attr_shape_new                    (const NsPangoRectangle        *ink_rect,
                                                                  const NsPangoRectangle        *logical_rect);

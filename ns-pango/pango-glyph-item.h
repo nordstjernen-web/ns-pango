@@ -80,6 +80,10 @@ void            ns_pango_glyph_item_letter_space (NsPangoGlyphItem *glyph_item,
 					       const char     *text,
 					       NsPangoLogAttr   *log_attrs,
 					       int             letter_spacing);
+NS_PANGO_AVAILABLE_IN_1_58
+void            ns_pango_glyph_item_word_space   (NsPangoGlyphItem *glyph_item,
+					       const char     *text,
+					       int             word_spacing);
 NS_PANGO_AVAILABLE_IN_1_26
 void 	  ns_pango_glyph_item_get_logical_widths (NsPangoGlyphItem *glyph_item,
 					       const char     *text,

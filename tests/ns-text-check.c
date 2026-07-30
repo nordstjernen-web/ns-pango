@@ -34,6 +34,7 @@
  *   ns-text-check bench [iters]   time layout and intrinsic sizing
  *   ns-text-check threads [n]     dump the corpus from n threads at once and
  *                                 check they all agree with a lone thread
+ *   ns-text-check spacing         check word-spacing against what CSS specifies
  */
 
 #include <ns-pango/pangocairo.h>
@@ -108,16 +109,19 @@ typedef struct
   NsPangoEllipsizeMode ellipsize;
   gboolean           justify;
   int                letter_spacing;  /* in points */
+  int                word_spacing;    /* in points */
 } Mode;
 
 static const Mode modes[] = {
-  { "free",      -1, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0 },
-  { "wrap-word", 120, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0 },
-  { "wrap-char", 120, NS_PANGO_WRAP_CHAR,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0 },
-  { "wrap-both",  60, NS_PANGO_WRAP_WORD_CHAR, NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0 },
-  { "justify",   140, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   TRUE,  0 },
-  { "ellipsis",  100, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_END,    FALSE, 0 },
-  { "spacing",   130, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 2 },
+  { "free",      -1, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0, 0 },
+  { "wrap-word", 120, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0, 0 },
+  { "wrap-char", 120, NS_PANGO_WRAP_CHAR,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0, 0 },
+  { "wrap-both",  60, NS_PANGO_WRAP_WORD_CHAR, NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0, 0 },
+  { "justify",   140, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   TRUE,  0, 0 },
+  { "ellipsis",  100, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_END,    FALSE, 0, 0 },
+  { "spacing",   130, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 2, 0 },
+  { "word-space", 130, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 0, 4 },
+  { "both-space", 130, NS_PANGO_WRAP_WORD,      NS_PANGO_ELLIPSIZE_NONE,   FALSE, 2, 3 },
 };
 
 static NsPangoLayout *
@@ -142,12 +146,16 @@ build_layout (NsPangoContext *context,
   else
     ns_pango_layout_set_width (layout, -1);
 
-  if (mode->letter_spacing != 0)
+  if (mode->letter_spacing != 0 || mode->word_spacing != 0)
     {
       NsPangoAttrList *attrs = ns_pango_attr_list_new ();
 
-      ns_pango_attr_list_insert (attrs,
-                                 ns_pango_attr_letter_spacing_new (mode->letter_spacing * NS_PANGO_SCALE));
+      if (mode->letter_spacing != 0)
+        ns_pango_attr_list_insert (attrs,
+                                   ns_pango_attr_letter_spacing_new (mode->letter_spacing * NS_PANGO_SCALE));
+      if (mode->word_spacing != 0)
+        ns_pango_attr_list_insert (attrs,
+                                   ns_pango_attr_word_spacing_new (mode->word_spacing * NS_PANGO_SCALE));
       ns_pango_layout_set_attributes (layout, attrs);
       ns_pango_attr_list_unref (attrs);
     }
@@ -326,6 +334,111 @@ do_threads (NsPangoContext *context,
   return failed;
 }
 
+/* CSS Text says word-spacing is added at word-separator characters and at no
+ * other, so the width of a line has to grow by exactly the spacing times the
+ * number of separators in it -- no matter the script or its direction, and
+ * whether or not letter spacing is also in play.
+ */
+typedef struct
+{
+  const char *name;
+  const char *text;
+  int         separators;
+} SpacingCase;
+
+static const SpacingCase spacing_cases[] = {
+  { "one space",         "a b",              1 },
+  { "three spaces",      "a b c d",          3 },
+  { "leading, trailing", " a b ",            3 },
+  { "run of spaces",     "a   b",            3 },
+  { "no-break space",    "a b",         1 },
+  { "ethiopic",          "ሀ፡ለ", 1 },
+  { "tab is not one",    "a\tb",             0 },
+  { "ideographic space", "日　本", 0 },
+  { "hebrew",            "שלו םב", 1 },
+  { "arabic",            "الع مر",  1 },
+  { "cjk without any",   "日本語", 0 },
+  { "none at all",       "abcdef",           0 },
+};
+
+static int
+measure_spaced (NsPangoContext *context,
+                const char     *text,
+                int             word_spacing,
+                int             letter_spacing)
+{
+  NsPangoLayout *layout = ns_pango_layout_new (context);
+  NsPangoFontDescription *desc = ns_pango_font_description_from_string (fonts[0]);
+  NsPangoAttrList *attrs = ns_pango_attr_list_new ();
+  int width = 0;
+
+  ns_pango_layout_set_font_description (layout, desc);
+  ns_pango_font_description_free (desc);
+
+  if (word_spacing != 0)
+    ns_pango_attr_list_insert (attrs, ns_pango_attr_word_spacing_new (word_spacing));
+  if (letter_spacing != 0)
+    ns_pango_attr_list_insert (attrs, ns_pango_attr_letter_spacing_new (letter_spacing));
+  ns_pango_layout_set_attributes (layout, attrs);
+  ns_pango_attr_list_unref (attrs);
+
+  ns_pango_layout_set_text (layout, text, -1);
+  ns_pango_layout_get_size (layout, &width, NULL);
+  g_object_unref (layout);
+
+  return width;
+}
+
+static int
+do_spacing (NsPangoContext *context)
+{
+  const int spacing = 10 * NS_PANGO_SCALE;
+  int failed = 0;
+
+  for (unsigned i = 0; i < G_N_ELEMENTS (spacing_cases); i++)
+    {
+      const SpacingCase *c = &spacing_cases[i];
+      int plain = measure_spaced (context, c->text, 0, 0);
+      int spaced = measure_spaced (context, c->text, spacing, 0);
+      int want = plain + c->separators * spacing;
+
+      printf ("%-20s %d separators: %d -> %d, wanted %d%s\n",
+              c->name, c->separators, plain, spaced, want,
+              spaced == want ? "" : "  WRONG");
+
+      if (spaced != want)
+        failed = 1;
+    }
+
+  /* Negative spacing has to take the same amount away. */
+  {
+    int plain = measure_spaced (context, "a b c", 0, 0);
+    int shrunk = measure_spaced (context, "a b c", -2 * NS_PANGO_SCALE, 0);
+    int want = plain - 2 * 2 * NS_PANGO_SCALE;
+
+    printf ("%-20s %d -> %d, wanted %d%s\n", "negative", plain, shrunk, want,
+            shrunk == want ? "" : "  WRONG");
+    if (shrunk != want)
+      failed = 1;
+  }
+
+  /* Word and letter spacing have to add up, not interfere. */
+  {
+    int plain = measure_spaced (context, "a b c", 0, 0);
+    int lettered = measure_spaced (context, "a b c", 0, 3 * NS_PANGO_SCALE);
+    int worded = measure_spaced (context, "a b c", 5 * NS_PANGO_SCALE, 0);
+    int both = measure_spaced (context, "a b c", 5 * NS_PANGO_SCALE, 3 * NS_PANGO_SCALE);
+    int want = lettered + (worded - plain);
+
+    printf ("%-20s letter %d, word %d, both %d, wanted %d%s\n", "composed",
+            lettered, worded, both, want, both == want ? "" : "  WRONG");
+    if (both != want)
+      failed = 1;
+  }
+
+  return failed;
+}
+
 static double
 elapsed_ms (GTimer *timer)
 {
@@ -406,9 +519,11 @@ main (int    argc,
     status = do_bench (context, argc > 2 ? atoi (argv[2]) : 20);
   else if (strcmp (command, "threads") == 0)
     status = do_threads (context, argc > 2 ? MAX (atoi (argv[2]), 1) : 8);
+  else if (strcmp (command, "spacing") == 0)
+    status = do_spacing (context);
   else
     {
-      fprintf (stderr, "usage: %s [dump|bench [iterations]|threads [count]]\n", argv[0]);
+      fprintf (stderr, "usage: %s [dump|bench [iterations]|threads [count]|spacing]\n", argv[0]);
       status = 2;
     }
 
