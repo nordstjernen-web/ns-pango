@@ -147,7 +147,11 @@ pkgconfig.generate(libpango,
   subdirs: ns_pango_api_name,
 )
 
-# FreeType
+# Fontconfig and FreeType. The library keeps the name ns-pangoft2 that
+# Northstar's meson.build asks for, but it holds only the fontconfig font
+# classes now: the FT2 renderer and the FT2 font are gone, and with them the
+# NsPangoFT2FontMap that could only produce FT2 fonts. Fonts come from the
+# pangocairo fontconfig fontmap.
 if build_pangoft2
   pangofc_headers = [
     'pangofc-font.h',
@@ -155,34 +159,14 @@ if build_pangoft2
     'pangofc-decoder.h',
   ]
 
-  pangofc_public_sources = [
+  pangoft2_sources = [
     'pangofc-font.c',
     'pangofc-fontmap.c',
     'pangofc-decoder.c',
     'pango-trace.c',
   ]
 
-  pangoft2_headers = [
-    'pangoft2.h',
-  ]
-
-  pangoft2_public_sources = [
-    'pangoft2-fontmap.c',
-  ]
-
-  pangoft2_sources = pangofc_public_sources + pangoft2_public_sources
-
-  if host_system == 'windows'
-    pangoft2_rc = configure_file(
-      input: 'pangoft2.rc.in',
-      output: 'pangoft2.rc',
-      configuration: ns_pango_features_conf,
-    )
-    pangoft2_res = import('windows').compile_resources(pangoft2_rc)
-    pangoft2_sources += pangoft2_res
-  endif
-
-  install_headers(pangoft2_headers + pangofc_headers, subdir: ns_pango_api_path)
+  install_headers(pangofc_headers, subdir: ns_pango_api_path)
 
   libpangoft2 = library(
     'ns-pangoft2-@0@'.format(ns_pango_api_version),
@@ -211,8 +195,8 @@ if build_pangoft2
   meson.override_dependency('ns-pangoft2', libpangoft2_dep)
 
   pkgconfig.generate(libpangoft2,
-    name: 'Pango FT2 and Pango Fc',
-    description: 'FreeType 2.0 and fontconfig font support for Pango',
+    name: 'Pango Fc',
+    description: 'Fontconfig and FreeType font support for Pango',
     filebase: 'ns-pangoft2',
     subdirs: ns_pango_api_name,
     libraries: freetype_lib,
@@ -224,7 +208,7 @@ if build_pangoft2
     description: 'Fontconfig support for Pango',
     filebase: 'ns-pangofc',
     subdirs: ns_pango_api_name,
-    requires: [ 'pangoft2' ],
+    requires: [ 'ns-pangoft2' ],
   )
 else
   # For usage as a subproject

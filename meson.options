@@ -1,18 +1,6 @@
-option('documentation',
-       type: 'boolean',
-       value: false,
-       description : 'Build API reference')
-
-option('gtk_doc',
-       type: 'boolean',
-       value: false,
-       description: 'Build API reference',
-       deprecated: 'documentation')
-
-option('man-pages',
-       type: 'boolean',
-       value: false,
-       description : 'Build man pages for installed tools')
+# Only options this fork still acts on. The documentation, man-page, example and
+# Xft options went with the code they configured; passing one now is an error
+# rather than a silent no-op.
 
 option('introspection',
        type: 'feature',
@@ -25,13 +13,8 @@ option('build-testsuite',
        type: 'boolean',
        value: false)
 
-option('build-examples',
-       description : 'Build example test programs',
-       type: 'boolean',
-       value: true)
-
 option('fontconfig',
-       description : 'Build with FontConfig support. Passing \'auto\' or \'disabled\' disables fontconfig where it is optional, i.e. on Windows and macOS. Passing \'disabled\' on platforms where fontconfig is required results in error.',
+       description : 'Build with FontConfig support. Fontconfig and FreeType are the only font backend this fork keeps, so disabling it leaves nothing to load fonts with.',
        type: 'feature',
        value: 'auto')
 
@@ -49,11 +32,6 @@ option('cairo',
        type : 'feature',
        value : 'enabled',
        description : 'Build with cairo support')
-
-option('xft',
-       type : 'feature',
-       value : 'auto',
-       description : 'Build with xft support')
 
 option('freetype',
        type : 'feature',

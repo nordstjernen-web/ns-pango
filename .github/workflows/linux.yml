@@ -69,6 +69,39 @@ jobs:
       - name: Build
         run: meson compile -C builddir
 
+      # Northstar links this statically, which hides an unresolved symbol until
+      # something pulls the object in. A shared build resolves every reference at
+      # link time, so it is the only build that proves the tree is whole.
+      - name: Build shared, to catch unresolved symbols
+        run: |
+          meson setup shareddir \
+            -Ddefault_library=shared \
+            -Dfontconfig=enabled \
+            -Dfreetype=enabled \
+            -Dintrospection=disabled \
+            -Dsysprof=disabled \
+            -Dlibthai=auto \
+            --wrap-mode=nofallback
+          meson compile -C shareddir
+
+      - name: Check every installed header declares something that exists
+        run: |
+          # An installed header that declares a function no longer in the tree
+          # turns into a link error in whatever calls it, and a static build
+          # never reports it because the object is simply never pulled in.
+          meson install -C shareddir --destdir /tmp/inst
+          nm -g --defined-only shareddir/ns-pango/*.so | \
+            awk '$2 ~ /^[TDBRW]$/ { print $3 }' | sort -u > /tmp/defined.txt
+          missing=0
+          for h in $(find /tmp/inst -name '*.h'); do
+            for f in $(grep -hoE '\bns_pango_[a-z0-9_]+[[:space:]]*\(' "$h" | \
+                       sed -E 's/[[:space:]]*\($//' | sort -u); do
+              grep -qx "$f" /tmp/defined.txt ||
+                { echo "$(basename "$h") declares $f, nothing defines it"; missing=1; }
+            done
+          done
+          exit $missing
+
       - name: Check the symbol prefixes
         run: |
           fail=0

@@ -29,10 +29,6 @@
 #include "pango-language.h"
 #include "pango-impl-utils.h"
 
-#ifdef HAVE_CORE_TEXT
-#include <CoreFoundation/CoreFoundation.h>
-#endif /* HAVE_CORE_TEXT */
-
 
 /* We embed a private struct right *before* a where a NsPangoLanguage *
  * points to.
@@ -200,42 +196,6 @@ _ns_pango_get_lc_ctype (void)
     return g_strdup (p);
 
   return g_win32_getlocale ();
-#elif defined(HAVE_CORE_TEXT)
-  CFArrayRef languages;
-  CFStringRef language;
-  gchar ret[16];
-  gchar *p;
-
-  /* Take the same approach as done for Windows above. First we check
-   * if somebody tried to set the locale through environment variables.
-   */
-  p = getenv ("LC_ALL");
-  if (p != NULL)
-    return g_strdup (p);
-
-  p = getenv ("LC_CTYPE");
-  if (p != NULL)
-    return g_strdup (p);
-
-  p = getenv ("LANG");
-  if (p != NULL)
-    return g_strdup (p);
-
-  /* If the environment variables are not set, determine the locale
-   * through the platform-native API.
-   */
-  languages = CFLocaleCopyPreferredLanguages ();
-  language = CFArrayGetValueAtIndex (languages, 0);
-
-  if (!CFStringGetCString (language, ret, 16, kCFStringEncodingUTF8))
-    {
-      CFRelease (languages);
-      return g_strdup (setlocale (LC_CTYPE, NULL));
-    }
-
-  CFRelease (languages);
-
-  return g_strdup (ret);
 #else
   {
     gchar *lc_ctype = setlocale (LC_CTYPE, NULL);

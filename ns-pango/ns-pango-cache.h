@@ -23,11 +23,19 @@
 #define __NS_PANGO_CACHE_H__
 
 #include <glib.h>
+#include <ns-pango/pango-version-macros.h>
 
 G_BEGIN_DECLS
 
+/* These need the visibility macro like every other entry point: the library is
+ * compiled with -fvisibility=hidden, so a declaration without it is not
+ * reachable from a shared build at all.
+ */
+
+NS_PANGO_AVAILABLE_IN_ALL
 void ns_pango_cache_clear     (void);
 
+NS_PANGO_AVAILABLE_IN_ALL
 void ns_pango_cache_get_stats (guint64 *hits,
                                guint64 *misses,
                                guint64 *skipped,

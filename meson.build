@@ -1,4 +1,4 @@
-project('ns-pango', 'c', 'cpp',
+project('ns-pango', 'c',
         version: '1.58.0',
         license: 'LGPLv2.1+',
         default_options: [
@@ -50,7 +50,6 @@ osx_current = ns_pango_binary_age - ns_pango_interface_age + 1
 ns_pango_osxversion = [osx_current, '@0@.@1@.0'.format(osx_current, ns_pango_interface_age)]
 
 cc = meson.get_compiler('c')
-cpp = meson.get_compiler('cpp')
 host_system = host_machine.system()
 subsystem = ''
 
@@ -62,7 +61,6 @@ endif
 
 # Compiler and linker flags
 common_cflags = []
-common_cppflags = []
 common_ldflags = []
 
 # Add more compiler warnings to the default set
@@ -178,13 +176,6 @@ endif
 # Check all compiler flags
 common_cflags += cc.get_supported_arguments(test_cflags)
 
-# Isolate the C++ compiler flags
-foreach cflag: common_cflags
-  if not test_c_only_flags.contains(cflag)
-    common_cppflags += [ cflag ]
-  endif
-endforeach
-
 # Linker flags
 if host_machine.system() == 'linux'
   common_ldflags += cc.get_supported_link_arguments([ '-Wl,-Bsymbolic', '-Wl,-z,relro', '-Wl,-z,now', ])
@@ -217,7 +208,6 @@ fribidi_req    = '>= 1.0.6'
 libthai_req    = '>= 0.1.9'
 harfbuzz_req   = '>= 8.3.0'
 fontconfig_req = '>= 2.15.0'
-xft_req        = '>= 2.0.0'
 cairo_req      = '>= 1.18.0'
 
 add_project_arguments([
@@ -336,31 +326,6 @@ if build_pangoft2
   ns_pango_deps += freetype_dep
 endif
 
-
-has_core_text = false
-if host_system == 'darwin' and subsystem == 'macos'
-  # for viewer-cocoa.m
-  add_languages('objc', native : false)
-
-  has_core_text = cc.links('''#include <CoreText/CoreText.h>
-                              int main (void) {
-                                CTGetCoreTextVersion ();
-                                return 0;
-                              }''',
-                           name: 'CoreText availability',
-                           dependencies: dependency('appleframeworks', modules: 'ApplicationServices'))
-  if has_core_text
-    ns_pango_conf.set('HAVE_CORE_TEXT', 1)
-  endif
-
-  ns_pango_deps += dependency('appleframeworks', modules: [ 'CoreFoundation', 'ApplicationServices' ])
-endif
-
-# Check for dwrite_3.h (from more recent Windows SDK or mingw-w64)
-if host_system == 'windows' and not cpp.has_header('dwrite_3.h')
-  error('Windows backend enabled but dwrite_3.h not found.')
-endif
-
 # Enable cairo-ft with FreeType and FontConfig support if
 # building as a subproject and FontConfig support is required
 # or requested
@@ -378,148 +343,50 @@ cairo_dep = dependency(
   required: get_option('cairo'),
   default_options: cairo_fallback_options,
 )
-cairo_dwrite_dep = disabler() # Only for Windows
 cairo_found_type = cairo_dep.type_name()
 
-# Check for Windows-only features from HarfBuzz
-if host_system == 'windows'
-  if cairo_dep.found()
-    # cairo < 1.17.8 used a different name
-    cairo_dwrite_dep = dependency(
-      ['cairo-dwrite-font', 'cairo-win32-dwrite-font'],
-      version: cairo_req,
-      required: false
-    )
-  endif
-
-  # Use hb-directwrite if we are also using cairo-dwrite-font,
-  # or if we are (unlikely) not enabling Cairo support
-  if not cairo_dep.found() or cairo_dwrite_dep.found()
-    if harfbuzz_dep.type_name() == 'internal' or \
-       cpp.has_function('hb_directwrite_face_create', dependencies: harfbuzz_dep)
-      ns_pango_conf.set('USE_HB_DWRITE', 1)
-    endif
-  else
-    if harfbuzz_dep.type_name() == 'internal' or \
-       cc.has_function('hb_gdi_face_create', dependencies: harfbuzz_dep)
-      ns_pango_conf.set('USE_HB_GDI', 1)
-    endif
-  endif
-endif
-
+# cairo-ft over fontconfig is the only font backend left, so there is nothing to
+# choose between: either cairo has it and this builds, or it does not and there
+# is no way to load a font.
 ns_pango_font_backends = []
-ns_pango_cairo_backends = []
 
 if cairo_dep.found()
-  # Check the following Cairo font backends
-  # - dependency
-  # - version
-  # - define
-  # - backend name
-  # Note that Cairo can be built with FreeType but without FontConfig
-
-  cairo_font_backends = [
-    [ 'cairo-ft', cairo_req, 'HAVE_CAIRO_FREETYPE', 'freetype', ],
-  ]
-
   if cairo_found_type == 'internal'
     cairo_features = subproject('cairo').get_variable('built_features')
+    cairo_ft_dep = dependency('', required: false)
+    foreach f: cairo_features
+      if f['name'] == 'cairo-ft'
+        cairo_ft_dep = cairo_dep
+      endif
+    endforeach
+  else
+    cairo_ft_dep = dependency('cairo-ft', version: cairo_req, required: false)
   endif
 
-  foreach b: cairo_font_backends
-    if cairo_found_type == 'pkgconfig'
-      dep = dependency(b[0], version: b[1], required: false)
-    else
-      dep = dependency('', required: false)
-      foreach f: cairo_features
-        if f['name'] == b[0]
-          dep = cairo_dep
-          message('Cairo font backend "@0@" enabled'.format(b))
-        endif
-      endforeach
-    endif
-    if dep.found()
-      if b[0] == 'cairo-ft'
-        if not build_pangoft2
-          continue
-        else
-          # Check external cairo-ft has the required FontConfig support
-          if dep.type_name() != 'internal'
-            cairo_fc_test = '''
+  if not cairo_ft_dep.found() or not build_pangoft2
+    error('ns-pango needs cairo built with FreeType support, plus fontconfig and freetype')
+  endif
+
+  if cairo_ft_dep.type_name() != 'internal'
+    # cairo-ft can be built without fontconfig, and then it cannot make a font
+    # face out of the pattern the fontmap matched.
+    if not cc.links('''
 #include <cairo-ft.h>
 int main() {
   FcPattern *p = NULL;
   cairo_ft_font_face_create_for_pattern (p);
   return 0;
-}'''
-            if not cc.links(cairo_fc_test,
-                            dependencies: dep,
-                            name : 'Cairo is built with FreeType and FontConfig support')
-              error('@0@ does not have the required FontConfig support'.format(b[0]))
-            endif
-          endif
-        endif
-      endif
-      if b[0] == 'cairo-quartz' and not ns_pango_conf.has('HAVE_CORE_TEXT')
-        continue
-      endif
-      ns_pango_conf.set(b[2], 1)
-      ns_pango_font_backends += b[3]
+}''',
+                    dependencies: cairo_ft_dep,
+                    name: 'Cairo is built with FreeType and FontConfig support')
+      error('cairo-ft does not have the required FontConfig support')
     endif
-  endforeach
-
-  if ns_pango_font_backends.length() == 0
-    error('No Cairo font backends found')
   endif
 
-  # Check the following Cairo surface backends
-  # - dependency
-  # - version
-  # - define
-  # - backend name
-  cairo_surface_backends = [
-    [ 'cairo-png', cairo_req, 'HAVE_CAIRO_PNG', 'png', ],
-    [ 'cairo-ps', cairo_req, 'HAVE_CAIRO_PS', 'ps', ],
-    [ 'cairo-pdf', cairo_req, 'HAVE_CAIRO_PDF', 'pdf', ],
-    [ 'cairo-xlib', cairo_req, 'HAVE_CAIRO_XLIB', 'xlib', ],
-  ]
-
-  foreach b: cairo_surface_backends
-    if cairo_found_type == 'pkgconfig'
-      dep = dependency(b[0], version: b[1], required: false)
-    else
-      dep = dependency('', required: false)
-      foreach f: cairo_features
-        if f['name'] == b[0]
-          dep = cairo_dep
-          message('Cairo surface backend "@0@" enabled'.format(b))
-        endif
-      endforeach
-    endif
-    if dep.found()
-      ns_pango_conf.set(b[2], 1)
-      ns_pango_cairo_backends += b[3]
-    endif
-  endforeach
-endif
-
-if cairo_dep.found()
+  ns_pango_conf.set('HAVE_CAIRO_FREETYPE', 1)
   ns_pango_conf.set('HAVE_CAIRO', 1)
+  ns_pango_font_backends += 'freetype'
   ns_pango_deps += cairo_dep
-
-  pangocairo_requires = ''
-
-  if ns_pango_font_backends.contains('freetype')
-    pangocairo_requires += 'pangoft2 '
-  endif
-
-  if ns_pango_font_backends.contains('win32')
-    pangocairo_requires += 'pangowin32 '
-  endif
-endif
-
-if cairo_dwrite_dep.found()
-  ns_pango_conf.set('HAVE_CAIRO_WIN32_DIRECTWRITE', 1)
 endif
 
 # introspection

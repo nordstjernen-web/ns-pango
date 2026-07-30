@@ -738,14 +738,6 @@ hb_font_t *           ns_pango_font_get_hb_font       (NsPangoFont        *font)
 NS_PANGO_AVAILABLE_IN_1_50
 NsPangoLanguage **      ns_pango_font_get_languages     (NsPangoFont        *font);
 
-NS_PANGO_AVAILABLE_IN_1_50
-GBytes *              ns_pango_font_serialize         (NsPangoFont        *font);
-
-NS_PANGO_AVAILABLE_IN_1_50
-NsPangoFont *           ns_pango_font_deserialize       (NsPangoContext     *context,
-                                                    GBytes           *bytes,
-                                                    GError          **error);
-
 /**
  * NS_PANGO_GLYPH_EMPTY:
  *
