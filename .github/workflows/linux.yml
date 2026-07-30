@@ -155,5 +155,12 @@ jobs:
             exit 1
           fi
 
+      # Northstar shapes off the main thread, and the shape cache is one table
+      # for the whole process.
+      - name: Check threads agree with a thread on its own
+        run: |
+          builddir/tests/ns-text-check threads 8
+          NS_PANGO_SHAPE_CACHE=0 builddir/tests/ns-text-check threads 8
+
       - name: Run the harness under the meson test runner
         run: meson test -C builddir --print-errorlogs

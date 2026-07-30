@@ -717,7 +717,16 @@ _ns_pango_cairo_font_get_metrics (NsPangoFont     *font,
   NsPangoCairoFontPrivate *cf_priv = NS_PANGO_CAIRO_FONT_PRIVATE (font);
   NsPangoCairoFontMetricsInfo *info = NULL; /* Quiet gcc */
   GSList *tmp_list;
-  static int in_get_metrics;
+
+  /* Measuring the approximate widths below lays text out, which asks for
+   * metrics again, so the recursion has to be guarded. The guard must be per
+   * thread: as one process-wide flag, a thread that entered here while another
+   * was already inside skipped the approximate widths altogether, and the font
+   * it was measuring kept those wrong metrics for as long as it lived. Two
+   * threads laying the same paragraph out then broke its lines differently.
+   */
+  static GPrivate in_get_metrics_key;
+  gboolean in_get_metrics = g_private_get (&in_get_metrics_key) != NULL;
 
   const char *sample_str = ns_pango_language_get_sample_string (language);
 
@@ -774,7 +783,7 @@ _ns_pango_cairo_font_get_metrics (NsPangoFont     *font,
        */
       if (!in_get_metrics)
         {
-          in_get_metrics = 1;
+          g_private_set (&in_get_metrics_key, GINT_TO_POINTER (1));
 
           /* Update approximate_*_width now */
           layout = ns_pango_layout_new (context);
@@ -793,7 +802,7 @@ _ns_pango_cairo_font_get_metrics (NsPangoFont     *font,
           info->metrics->approximate_digit_width = max_glyph_width (layout);
 
           g_object_unref (layout);
-          in_get_metrics = 0;
+          g_private_set (&in_get_metrics_key, NULL);
         }
 
       /* We may actually reuse ascent/descent we got from cairo here.  that's

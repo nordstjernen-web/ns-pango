@@ -30,8 +30,10 @@
  * once, and measuring the same text repeatedly the way intrinsic sizing does.
  *
  * Usage:
- *   ns-text-check dump           print the glyph-level dump of the corpus
- *   ns-text-check bench [iters]  time layout and intrinsic sizing
+ *   ns-text-check dump            print the glyph-level dump of the corpus
+ *   ns-text-check bench [iters]   time layout and intrinsic sizing
+ *   ns-text-check threads [n]     dump the corpus from n threads at once and
+ *                                 check they all agree with a lone thread
  */
 
 #include <ns-pango/pangocairo.h>
@@ -154,7 +156,8 @@ build_layout (NsPangoContext *context,
 }
 
 static void
-dump_layout (const char     *sample_name,
+dump_layout (GString        *out,
+             const char     *sample_name,
              const char     *font,
              const Mode     *mode,
              NsPangoLayout  *layout)
@@ -164,9 +167,9 @@ dump_layout (const char     *sample_name,
   int width, height;
 
   ns_pango_layout_get_size (layout, &width, &height);
-  printf ("%s|%s|%s|size %d %d|lines %d\n",
-          sample_name, font, mode->name, width, height,
-          ns_pango_layout_get_line_count (layout));
+  g_string_append_printf (out, "%s|%s|%s|size %d %d|lines %d\n",
+                          sample_name, font, mode->name, width, height,
+                          ns_pango_layout_get_line_count (layout));
 
   for (lines = ns_pango_layout_get_lines_readonly (layout); lines; lines = lines->next, line_no++)
     {
@@ -176,10 +179,11 @@ dump_layout (const char     *sample_name,
       int run_no = 0;
 
       ns_pango_layout_line_get_extents (line, &ink, &logical);
-      printf ("  line %d start %d len %d dir %d ink %d %d %d %d logical %d %d %d %d\n",
-              line_no, line->start_index, line->length, line->resolved_dir,
-              ink.x, ink.y, ink.width, ink.height,
-              logical.x, logical.y, logical.width, logical.height);
+      g_string_append_printf (out,
+                              "  line %d start %d len %d dir %d ink %d %d %d %d logical %d %d %d %d\n",
+                              line_no, line->start_index, line->length, line->resolved_dir,
+                              ink.x, ink.y, ink.width, ink.height,
+                              logical.x, logical.y, logical.width, logical.height);
 
       for (runs = line->runs; runs; runs = runs->next, run_no++)
         {
@@ -187,20 +191,22 @@ dump_layout (const char     *sample_name,
           NsPangoFontDescription *desc = ns_pango_font_describe (run->item->analysis.font);
           char *desc_str = ns_pango_font_description_to_string (desc);
 
-          printf ("    run %d offset %d len %d chars %d level %d gravity %d script %d font %s\n",
-                  run_no, run->item->offset, run->item->length, run->item->num_chars,
-                  run->item->analysis.level, run->item->analysis.gravity,
-                  run->item->analysis.script, desc_str);
+          g_string_append_printf (out,
+                                  "    run %d offset %d len %d chars %d level %d gravity %d script %d font %s\n",
+                                  run_no, run->item->offset, run->item->length,
+                                  run->item->num_chars, run->item->analysis.level,
+                                  run->item->analysis.gravity,
+                                  run->item->analysis.script, desc_str);
 
           for (int i = 0; i < run->glyphs->num_glyphs; i++)
             {
               NsPangoGlyphInfo *gi = &run->glyphs->glyphs[i];
 
-              printf ("      g %d %u w %d o %d %d c %d cs %d col %d\n",
-                      i, gi->glyph, gi->geometry.width,
-                      gi->geometry.x_offset, gi->geometry.y_offset,
-                      run->glyphs->log_clusters[i],
-                      gi->attr.is_cluster_start, gi->attr.is_color);
+              g_string_append_printf (out, "      g %d %u w %d o %d %d c %d cs %d col %d\n",
+                                      i, gi->glyph, gi->geometry.width,
+                                      gi->geometry.x_offset, gi->geometry.y_offset,
+                                      run->glyphs->log_clusters[i],
+                                      gi->attr.is_cluster_start, gi->attr.is_color);
             }
 
           g_free (desc_str);
@@ -220,12 +226,14 @@ report_stats (void)
            (unsigned long long) skipped, (unsigned long long) entries);
 }
 
-static int
-do_dump (NsPangoContext *context)
+/* Two passes, so that everything the first pass shaped is served from the cache
+ * in the second. Both passes must dump identically.
+ */
+static GString *
+dump_corpus (NsPangoContext *context)
 {
-  /* Two passes, so that everything the first pass shaped is served from the
-   * cache in the second. The dump of both passes must be identical.
-   */
+  GString *out = g_string_new (NULL);
+
   for (int pass = 0; pass < 2; pass++)
     for (unsigned f = 0; f < G_N_ELEMENTS (fonts); f++)
       for (unsigned m = 0; m < G_N_ELEMENTS (modes); m++)
@@ -233,13 +241,89 @@ do_dump (NsPangoContext *context)
           {
             NsPangoLayout *layout = build_layout (context, fonts[f], samples[s].text, &modes[m]);
 
-            dump_layout (samples[s].name, fonts[f], &modes[m], layout);
+            dump_layout (out, samples[s].name, fonts[f], &modes[m], layout);
             g_object_unref (layout);
           }
+
+  return out;
+}
+
+static int
+do_dump (NsPangoContext *context)
+{
+  GString *out = dump_corpus (context);
+
+  fwrite (out->str, 1, out->len, stdout);
+  g_string_free (out, TRUE);
 
   report_stats ();
 
   return 0;
+}
+
+/* The shape cache is one table for the whole process, and Northstar shapes off
+ * the main thread, so every thread has to see the same glyphs as a thread on its
+ * own would. Each thread gets its own fontmap and context -- those are
+ * per-object, not shared -- and the cache underneath them is what is shared.
+ */
+typedef struct
+{
+  char *checksum;
+} ThreadResult;
+
+static gpointer
+dump_in_thread (gpointer data)
+{
+  ThreadResult *result = data;
+  NsPangoFontMap *map = ns_pango_cairo_font_map_get_default ();
+  NsPangoContext *context = ns_pango_font_map_create_context (map);
+  GString *out = dump_corpus (context);
+
+  result->checksum = g_compute_checksum_for_string (G_CHECKSUM_SHA256, out->str, out->len);
+
+  g_string_free (out, TRUE);
+  g_object_unref (context);
+
+  return NULL;
+}
+
+static int
+do_threads (NsPangoContext *context,
+            int             n_threads)
+{
+  GString *reference = dump_corpus (context);
+  char *want = g_compute_checksum_for_string (G_CHECKSUM_SHA256, reference->str, reference->len);
+  GThread **threads = g_new0 (GThread *, n_threads);
+  ThreadResult *results = g_new0 (ThreadResult, n_threads);
+  int failed = 0;
+
+  for (int i = 0; i < n_threads; i++)
+    threads[i] = g_thread_new ("dump", dump_in_thread, &results[i]);
+
+  for (int i = 0; i < n_threads; i++)
+    {
+      g_thread_join (threads[i]);
+
+      if (g_strcmp0 (results[i].checksum, want) != 0)
+        {
+          fprintf (stderr, "thread %d dumped %s, wanted %s\n",
+                   i, results[i].checksum, want);
+          failed = 1;
+        }
+
+      g_free (results[i].checksum);
+    }
+
+  printf ("%d threads agreed on %s\n", n_threads, want);
+
+  g_free (results);
+  g_free (threads);
+  g_free (want);
+  g_string_free (reference, TRUE);
+
+  report_stats ();
+
+  return failed;
 }
 
 static double
@@ -320,9 +404,11 @@ main (int    argc,
     status = do_dump (context);
   else if (strcmp (command, "bench") == 0)
     status = do_bench (context, argc > 2 ? atoi (argv[2]) : 20);
+  else if (strcmp (command, "threads") == 0)
+    status = do_threads (context, argc > 2 ? MAX (atoi (argv[2]), 1) : 8);
   else
     {
-      fprintf (stderr, "usage: %s [dump|bench [iterations]]\n", argv[0]);
+      fprintf (stderr, "usage: %s [dump|bench [iterations]|threads [count]]\n", argv[0]);
       status = 2;
     }
 

@@ -18,3 +18,7 @@ test('dump-uncached', ns_text_check, args: [ 'dump' ], timeout: 120,
      env: { 'NS_PANGO_SHAPE_CACHE': '0' })
 test('dump-verify', ns_text_check, args: [ 'dump' ], timeout: 240,
      env: { 'NS_PANGO_SHAPE_CACHE': 'verify' })
+
+# The shape cache is one table for the whole process and Northstar shapes off the
+# main thread, so threads sharing it must not see different glyphs.
+test('threads', ns_text_check, args: [ 'threads', '8' ], timeout: 240)
