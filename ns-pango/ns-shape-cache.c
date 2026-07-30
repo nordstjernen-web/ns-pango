@@ -34,10 +34,11 @@
  * reads.
  *
  * An item is only cached when its shaping cannot depend on the text around it:
- * HarfBuzz is given the paragraph as context, so an item that starts or ends
- * mid-word may join, reorder or ligate across its own boundary. Requiring
- * whitespace (or the paragraph edge) on both sides makes the cached result
- * independent of where the item sits.
+ * HarfBuzz is given the paragraph as pre- and post-context, so an item that
+ * starts or ends mid-word may join, reorder or ligate across its own boundary.
+ * A boundary is independent when the character on either side of it neither
+ * joins nor ligates: any space character, or an ideograph, kana letter or
+ * Hangul syllable, which are written without spaces and never join.
  */
 
 #define NS_SHAPE_CACHE_MAX_ENTRIES 20000
@@ -56,6 +57,7 @@ struct _NsPangoShapeKey
   guint32    shape_flags;
   guint32    show_flags;
   guint32    transform;
+  guint32    hyphen;
   guint32    n_features;
   guint32    text_length;
   hb_feature_t features[8];
@@ -64,18 +66,25 @@ struct _NsPangoShapeKey
 
 typedef struct
 {
-  int              num_glyphs;
+  int               num_glyphs;
+  guint             generation;
   NsPangoGlyphInfo *glyphs;
-  int             *log_clusters;
+  int              *log_clusters;
 } CachedRun;
 
 static GHashTable *shape_cache;
 G_LOCK_DEFINE_STATIC (shape_cache);
 static gsize cache_bytes;
-static guint64 cache_hits;
-static guint64 cache_misses;
-static guint64 cache_skips;
-static guint64 skip_font, skip_len, skip_feat, skip_hyphen, skip_ctx;
+static guint cache_generation = 1;
+
+/* Diagnostics only, so counters that may wrap are good enough. They are
+ * atomic rather than plain because every thread that shapes writes them, and a
+ * data race is undefined behaviour even where the value does not matter.
+ */
+static gint cache_hits;
+static gint cache_misses;
+static gint cache_skips;
+static gint skip_font, skip_len, skip_feat, skip_ctx;
 
 static gboolean
 enabled_from_env (void)
@@ -88,33 +97,70 @@ enabled_from_env (void)
 gboolean
 ns_pango_shape_cache_enabled (void)
 {
-  static int enabled = -1;
+  static gint enabled = -1;
+  gint value = g_atomic_int_get (&enabled);
 
-  if (G_UNLIKELY (enabled < 0))
-    enabled = enabled_from_env () ? 1 : 0;
+  if (G_UNLIKELY (value < 0))
+    {
+      value = enabled_from_env () ? 1 : 0;
+      g_atomic_int_set (&enabled, value);
+    }
 
-  return enabled == 1;
+  return value == 1;
 }
 
 gboolean
 ns_pango_shape_cache_verifying (void)
 {
-  static int verifying = -1;
+  static gint verifying = -1;
+  gint value = g_atomic_int_get (&verifying);
 
-  if (G_UNLIKELY (verifying < 0))
+  if (G_UNLIKELY (value < 0))
     {
       const char *v = g_getenv ("NS_PANGO_SHAPE_CACHE");
 
-      verifying = (v && g_ascii_strcasecmp (v, "verify") == 0) ? 1 : 0;
+      value = (v && g_ascii_strcasecmp (v, "verify") == 0) ? 1 : 0;
+      g_atomic_int_set (&verifying, value);
     }
 
-  return verifying == 1;
+  return value == 1;
+}
+
+/* CJK text has no spaces in it, so a rule that wants whitespace at both ends
+ * of an item never caches a CJK paragraph at all -- and CJK is where a page
+ * shapes the most glyphs. An ideograph, a kana letter and a precomposed Hangul
+ * syllable neither join nor ligate with a neighbour, so a boundary next to one
+ * is as independent as a boundary next to a space.
+ *
+ * The ranges are deliberately narrow. Left out, because they can interact
+ * across the boundary: CJK punctuation, which fonts squeeze with contextual
+ * spacing features; the prolonged sound mark and the iteration marks, which are
+ * modifier letters; the combining voiced sound marks; the halfwidth and
+ * fullwidth forms; and Hangul jamo, which compose into syllables.
+ */
+static gboolean
+isolated_ideograph (gunichar ch)
+{
+  return (ch >= 0x4E00 && ch <= 0x9FFF) ||    /* CJK Unified Ideographs */
+         (ch >= 0x3400 && ch <= 0x4DBF) ||    /* ... Extension A */
+         (ch >= 0xF900 && ch <= 0xFAFF) ||    /* Compatibility Ideographs */
+         (ch >= 0x20000 && ch <= 0x2A6DF) ||  /* ... Extension B */
+         (ch >= 0x2A700 && ch <= 0x2EBEF) ||  /* ... Extensions C to F */
+         (ch >= 0x3041 && ch <= 0x3096) ||    /* Hiragana letters */
+         (ch >= 0x30A1 && ch <= 0x30FA) ||    /* Katakana letters */
+         (ch >= 0xAC00 && ch <= 0xD7A3);      /* Hangul syllables */
 }
 
 static gboolean
 boundary_char (gunichar ch)
 {
-  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+  /* Every space character, not only ASCII space: &nbsp; is everywhere in HTML,
+   * and U+3000 is the space CJK text uses when it uses one at all.
+   */
+  return ch == '\t' || ch == '\n' || ch == '\v' || ch == '\f' || ch == '\r' ||
+         ch == 0x2028 || ch == 0x2029 ||
+         g_unichar_type (ch) == G_UNICODE_SPACE_SEPARATOR ||
+         isolated_ideograph (ch);
 }
 
 static gboolean
@@ -128,11 +174,15 @@ attaches_to_neighbour (gunichar ch)
          type == G_UNICODE_FORMAT;
 }
 
+/* @trailing_edge_is_final says the shaper will not see any of the following
+ * text, so only the leading boundary can make the result depend on position.
+ */
 static gboolean
 context_independent (const char *item_text,
                      int         item_length,
                      const char *paragraph_text,
-                     int         paragraph_length)
+                     int         paragraph_length,
+                     gboolean    trailing_edge_is_final)
 {
   const char *item_end = item_text + item_length;
 
@@ -147,7 +197,7 @@ context_independent (const char *item_text,
         return FALSE;
     }
 
-  if (item_end < paragraph_text + paragraph_length)
+  if (!trailing_edge_is_final && item_end < paragraph_text + paragraph_length)
     {
       gunichar last = g_utf8_get_char (g_utf8_prev_char (item_end));
 
@@ -184,6 +234,7 @@ key_equal (gconstpointer a,
       ka->shape_flags != kb->shape_flags ||
       ka->show_flags != kb->show_flags ||
       ka->transform != kb->transform ||
+      ka->hyphen != kb->hyphen ||
       ka->n_features != kb->n_features ||
       ka->text_length != kb->text_length)
     return FALSE;
@@ -235,6 +286,7 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
                               NsPangoShapeFlags      shape_flags,
                               guint                  show_flags,
                               guint                  transform,
+                              NsPangoShapeHyphen     hyphen,
                               const hb_feature_t    *features,
                               guint                  n_features)
 {
@@ -247,28 +299,32 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
   if (analysis->font == NULL ||
       item_length <= 0 ||
       item_length > NS_SHAPE_CACHE_MAX_TEXT ||
-      n_features > G_N_ELEMENTS (key->features) ||
-      (analysis->flags & NS_PANGO_ANALYSIS_FLAG_NEED_HYPHEN) != 0)
+      n_features > G_N_ELEMENTS (key->features))
     {
       if (analysis->font == NULL)
-        skip_font++;
+        g_atomic_int_inc (&skip_font);
       else if (item_length <= 0 || item_length > NS_SHAPE_CACHE_MAX_TEXT)
-        skip_len++;
-      else if (n_features > G_N_ELEMENTS (key->features))
-        skip_feat++;
+        g_atomic_int_inc (&skip_len);
       else
-        skip_hyphen++;
+        g_atomic_int_inc (&skip_feat);
 
-      cache_skips++;
+      g_atomic_int_inc (&cache_skips);
 
       return NULL;
     }
 
+  /* Appending a hyphen clears the post-context HarfBuzz was given, so a
+   * hyphenated item is shaped as if it ended the paragraph. That is what makes
+   * hyphenation cacheable at all: the break it follows is mid-word, so the
+   * trailing boundary test could never pass on its own.
+   */
   if (!context_independent (item_text, item_length,
-                            paragraph_text, paragraph_length))
+                            paragraph_text, paragraph_length,
+                            NS_PANGO_SHAPE_HYPHEN_KIND (hyphen) == NS_PANGO_SHAPE_HYPHEN_UNICODE ||
+                            NS_PANGO_SHAPE_HYPHEN_KIND (hyphen) == NS_PANGO_SHAPE_HYPHEN_ASCII))
     {
-      skip_ctx++;
-      cache_skips++;
+      g_atomic_int_inc (&skip_ctx);
+      g_atomic_int_inc (&cache_skips);
       return NULL;
     }
 
@@ -282,6 +338,7 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
   key->shape_flags = shape_flags;
   key->show_flags = show_flags;
   key->transform = transform;
+  key->hyphen = hyphen;
   key->n_features = n_features;
   key->text_length = item_length;
   if (n_features > 0)
@@ -300,6 +357,7 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
   hash = hash * 33 + key->shape_flags;
   hash = hash * 33 + key->show_flags;
   hash = hash * 33 + key->transform;
+  hash = hash * 33 + key->hyphen;
   for (guint i = 0; i < n_features; i++)
     hash = hash * 33 + (guint) key->features[i].tag + key->features[i].value;
   key->hash = hash;
@@ -338,15 +396,20 @@ ns_pango_shape_cache_lookup (const NsPangoShapeKey *key,
   run = shape_cache != NULL ? g_hash_table_lookup (shape_cache, key) : NULL;
   if (run == NULL)
     {
-      cache_misses++;
       G_UNLOCK (shape_cache);
+      g_atomic_int_inc (&cache_misses);
       return FALSE;
     }
 
-  cache_hits++;
+  /* Stamping the entry is what lets eviction keep the working set: a sweep
+   * drops only what nothing has asked for since the previous sweep.
+   */
+  run->generation = cache_generation;
   copy_run_to_glyphs (run, glyphs);
 
   G_UNLOCK (shape_cache);
+
+  g_atomic_int_inc (&cache_hits);
 
   return TRUE;
 }
@@ -398,6 +461,54 @@ ns_pango_shape_cache_matches (const NsPangoShapeKey    *key,
   return TRUE;
 }
 
+/* Both of these run with the lock held. */
+
+static gboolean
+drop_untouched_entries (void)
+{
+  GHashTableIter iter;
+  gpointer k, v;
+  gsize freed = 0;
+
+  g_hash_table_iter_init (&iter, shape_cache);
+  while (g_hash_table_iter_next (&iter, &k, &v))
+    {
+      const NsPangoShapeKey *key = k;
+      CachedRun *run = v;
+
+      if (run->generation != cache_generation)
+        {
+          freed += run_size (run, key->text_length);
+          g_hash_table_iter_remove (&iter);
+        }
+    }
+
+  cache_bytes -= MIN (freed, cache_bytes);
+  cache_generation++;
+
+  return freed > 0;
+}
+
+static void
+make_room (void)
+{
+  if (g_hash_table_size (shape_cache) < NS_SHAPE_CACHE_MAX_ENTRIES &&
+      cache_bytes < NS_SHAPE_CACHE_MAX_BYTES)
+    return;
+
+  /* Dropping the lot is a cliff a browser hits mid-scroll: the next frame
+   * reshapes every run on screen. Sweep away what has not been read since the
+   * last sweep instead, and clear outright only when that frees nothing --
+   * which means the whole cache is the working set and there is nothing better
+   * to throw away.
+   */
+  if (!drop_untouched_entries ())
+    {
+      g_hash_table_remove_all (shape_cache);
+      cache_bytes = 0;
+    }
+}
+
 void
 ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
                              const NsPangoGlyphString *glyphs)
@@ -417,12 +528,8 @@ ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
 
   if (G_UNLIKELY (shape_cache == NULL))
     shape_cache = g_hash_table_new_full (key_hash, key_equal, key_free, run_free);
-  else if (g_hash_table_size (shape_cache) >= NS_SHAPE_CACHE_MAX_ENTRIES ||
-           cache_bytes >= NS_SHAPE_CACHE_MAX_BYTES)
-    {
-      g_hash_table_remove_all (shape_cache);
-      cache_bytes = 0;
-    }
+  else
+    make_room ();
 
   run = g_hash_table_lookup (shape_cache, key);
   if (run != NULL)
@@ -430,6 +537,7 @@ ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
 
   run = g_new (CachedRun, 1);
   run->num_glyphs = glyphs->num_glyphs;
+  run->generation = cache_generation;
   run->glyphs = g_memdup2 (glyphs->glyphs,
                            glyphs->num_glyphs * sizeof (NsPangoGlyphInfo));
   run->log_clusters = g_memdup2 (glyphs->log_clusters,
@@ -466,21 +574,21 @@ ns_pango_cache_get_stats (guint64 *hits,
                           guint64 *skipped,
                           guint64 *entries)
 {
-  G_LOCK (shape_cache);
+  if (hits) *hits = (guint) g_atomic_int_get (&cache_hits);
+  if (misses) *misses = (guint) g_atomic_int_get (&cache_misses);
+  if (skipped) *skipped = (guint) g_atomic_int_get (&cache_skips);
 
-  if (hits) *hits = cache_hits;
-  if (misses) *misses = cache_misses;
-  if (skipped) *skipped = cache_skips;
-  if (entries) *entries = shape_cache ? g_hash_table_size (shape_cache) : 0;
+  if (entries)
+    {
+      G_LOCK (shape_cache);
+      *entries = shape_cache != NULL ? g_hash_table_size (shape_cache) : 0;
+      G_UNLOCK (shape_cache);
+    }
 
   if (g_getenv ("NS_PANGO_CACHE_DEBUG") != NULL)
-    g_printerr ("[ns-pango] skips: font=%llu len=%llu features=%llu "
-                "hyphen=%llu context=%llu\n",
-                (unsigned long long) skip_font,
-                (unsigned long long) skip_len,
-                (unsigned long long) skip_feat,
-                (unsigned long long) skip_hyphen,
-                (unsigned long long) skip_ctx);
-
-  G_UNLOCK (shape_cache);
+    g_printerr ("[ns-pango] skips: font=%d len=%d features=%d context=%d\n",
+                g_atomic_int_get (&skip_font),
+                g_atomic_int_get (&skip_len),
+                g_atomic_int_get (&skip_feat),
+                g_atomic_int_get (&skip_ctx));
 }

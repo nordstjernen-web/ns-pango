@@ -300,6 +300,38 @@ find_text_transform (const NsPangoAnalysis *analysis)
   return transform;
 }
 
+/* Which hyphen ns_pango_hb_shape will append, decided the same way and from the
+ * same font, so that the shape cache can key on it. The nominal-glyph funcs the
+ * sub-font installs do not change the answer for either candidate, so the
+ * font's own hb_font is enough and no sub-font has to be created to ask.
+ */
+static NsPangoShapeHyphen
+find_hyphen (const NsPangoAnalysis *analysis,
+             NsPangoLogAttr        *log_attrs,
+             int                    num_chars)
+{
+  hb_font_t *hb_font;
+  hb_codepoint_t glyph;
+  NsPangoShapeHyphen hyphen;
+
+  if ((analysis->flags & NS_PANGO_ANALYSIS_FLAG_NEED_HYPHEN) == 0)
+    return NS_PANGO_SHAPE_HYPHEN_NONE;
+
+  hb_font = ns_pango_font_get_hb_font (analysis->font);
+
+  if (hb_font_get_nominal_glyph (hb_font, 0x2010, &glyph))
+    hyphen = NS_PANGO_SHAPE_HYPHEN_UNICODE;
+  else if (hb_font_get_nominal_glyph (hb_font, '-', &glyph))
+    hyphen = NS_PANGO_SHAPE_HYPHEN_ASCII;
+  else
+    hyphen = NS_PANGO_SHAPE_HYPHEN_MISSING;
+
+  if (log_attrs != NULL && log_attrs[num_chars].break_removes_preceding)
+    hyphen |= NS_PANGO_SHAPE_HYPHEN_TRIMMED;
+
+  return hyphen;
+}
+
 static gboolean
 font_has_color (hb_font_t *font)
 {
@@ -832,6 +864,7 @@ ns_pango_shape_internal (const char          *item_text,
                                       flags,
                                       find_show_flags (analysis),
                                       find_text_transform (analysis),
+                                      find_hyphen (analysis, log_attrs, num_chars),
                                       features, num_features);
 
   if (key != NULL &&

@@ -30,6 +30,25 @@ G_BEGIN_DECLS
 
 typedef struct _NsPangoShapeKey NsPangoShapeKey;
 
+/* What shaping will do to a hyphenated item: which hyphen it appends, if the
+ * font has one, and whether it drops the character before the break. Both
+ * change the glyphs, so both belong in the cache key; and appending a hyphen
+ * also hides the text after the item from the shaper, which is what makes a
+ * mid-word break cacheable at all.
+ */
+typedef enum
+{
+  NS_PANGO_SHAPE_HYPHEN_NONE    = 0,
+  NS_PANGO_SHAPE_HYPHEN_UNICODE = 1,
+  NS_PANGO_SHAPE_HYPHEN_ASCII   = 2,
+  NS_PANGO_SHAPE_HYPHEN_MISSING = 3,
+
+  /* Or'd onto one of the above when the character before the break goes away. */
+  NS_PANGO_SHAPE_HYPHEN_TRIMMED = 4,
+} NsPangoShapeHyphen;
+
+#define NS_PANGO_SHAPE_HYPHEN_KIND(h) ((h) & 3)
+
 gboolean          ns_pango_shape_cache_enabled   (void);
 
 gboolean          ns_pango_shape_cache_verifying (void);
@@ -42,6 +61,7 @@ NsPangoShapeKey * ns_pango_shape_cache_key_new   (const NsPangoAnalysis *analysi
                                                   NsPangoShapeFlags      shape_flags,
                                                   guint                  show_flags,
                                                   guint                  transform,
+                                                  NsPangoShapeHyphen     hyphen,
                                                   const hb_feature_t    *features,
                                                   guint                  n_features);
 
