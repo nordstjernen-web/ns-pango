@@ -837,52 +837,58 @@ item_runs_backwards (const NsPangoAnalysis *analysis)
          (NS_PANGO_GRAVITY_IS_IMPROPER (analysis->gravity) != 0);
 }
 
-static gboolean
-segment_keys_init (NsPangoShapeKey       *keys,
-                   const guint32         *starts,
-                   guint                  n,
-                   const char            *item_text,
-                   int                    item_length,
-                   const char            *paragraph_text,
-                   int                    paragraph_length,
-                   const NsPangoAnalysis *analysis,
-                   NsPangoShapeFlags      flags,
-                   guint                  show_flags,
-                   const hb_feature_t    *features,
-                   unsigned int           num_features)
+/* Everything a piece needs to be looked up or stored, gathered once so that
+ * the keys themselves can be built one at a time. A key is a couple of hundred
+ * bytes, and an item can hold hundreds of pieces, so an array of them would put
+ * a hundred kilobytes on the stack of every thread that shapes.
+ */
+typedef struct
 {
-  for (guint i = 0; i < n; i++)
-    {
-      int len = (int) ((i + 1 < n ? starts[i + 1] : (guint32) item_length) - starts[i]);
+  const char            *item_text;
+  int                    item_length;
+  const char            *paragraph_text;
+  int                    paragraph_length;
+  const NsPangoAnalysis *analysis;
+  NsPangoShapeFlags      flags;
+  guint                  show_flags;
+  const hb_feature_t    *features;
+  unsigned int           num_features;
+  const guint32         *starts;
+  guint                  n;
+} SegmentPlan;
 
-      if (!ns_pango_shape_cache_key_init (&keys[i], analysis,
-                                          item_text + starts[i], len,
-                                          paragraph_text, paragraph_length,
-                                          flags, show_flags,
-                                          NS_PANGO_TEXT_TRANSFORM_NONE,
-                                          NS_PANGO_SHAPE_HYPHEN_NONE,
-                                          features, num_features))
-        return FALSE;
-    }
+static gboolean
+segment_key (const SegmentPlan *plan,
+             guint              i,
+             NsPangoShapeKey   *key)
+{
+  guint32 start = plan->starts[i];
+  int len = (int) ((i + 1 < plan->n ? plan->starts[i + 1]
+                                    : (guint32) plan->item_length) - start);
 
-  return TRUE;
+  return ns_pango_shape_cache_key_init (key, plan->analysis,
+                                        plan->item_text + start, len,
+                                        plan->paragraph_text, plan->paragraph_length,
+                                        plan->flags, plan->show_flags,
+                                        NS_PANGO_TEXT_TRANSFORM_NONE,
+                                        NS_PANGO_SHAPE_HYPHEN_NONE,
+                                        plan->features, plan->num_features);
 }
 
 /* Divides a glyph string that was shaped whole along the item's cut points,
- * and stores each piece. Returns FALSE without storing anything if the glyphs
- * of a piece are not one unbroken stretch of the string, which is the
- * assumption the cut rule is there to hold up.
+ * and stores each piece. Stores nothing at all if the glyphs of a piece are not
+ * one unbroken stretch of the string, or if the pieces do not lie in the order
+ * the shaper laid them down -- both of which the cut rule is there to hold up,
+ * and neither of which is worth trusting without looking.
  */
-static gboolean
-insert_segments (const NsPangoShapeKey    *keys,
-                 const guint32            *starts,
-                 guint                     n,
-                 int                       item_length,
+static void
+insert_segments (const SegmentPlan        *plan,
                  const NsPangoGlyphString *glyphs,
                  gboolean                  backwards)
 {
   int first[NS_PANGO_SHAPE_MAX_SEGMENTS];
   int count[NS_PANGO_SHAPE_MAX_SEGMENTS];
+  guint n = plan->n;
   int seen = 0;
 
   for (guint i = 0; i < n; i++)
@@ -893,45 +899,45 @@ insert_segments (const NsPangoShapeKey    *keys,
       int cluster = glyphs->log_clusters[g];
       guint seg;
 
-      if (cluster < 0 || cluster >= item_length)
-        return FALSE;
+      if (cluster < 0 || cluster >= plan->item_length)
+        return;
 
       for (seg = n; seg > 0; seg--)
-        if ((guint32) cluster >= starts[seg - 1])
+        if ((guint32) cluster >= plan->starts[seg - 1])
           break;
       if (seg == 0)
-        return FALSE;
+        return;
       seg--;
 
       if (count[seg] == 0)
         first[seg] = g;
       else if (first[seg] + count[seg] != g)
-        return FALSE;
+        return;
       count[seg]++;
     }
 
   for (guint i = 0; i < n; i++)
     seen += count[i];
   if (seen != glyphs->num_glyphs)
-    return FALSE;
+    return;
 
-  /* The pieces have to come out of the string in the order the shaper laid
-   * them down, or reading them back would reorder the item.
-   */
   for (guint i = 1; i < n; i++)
     {
       guint a = backwards ? n - i : i - 1;
       guint b = backwards ? n - i - 1 : i;
 
       if (count[a] > 0 && count[b] > 0 && first[a] > first[b])
-        return FALSE;
+        return;
     }
 
   for (guint i = 0; i < n; i++)
-    ns_pango_shape_cache_insert_range (&keys[i], glyphs,
-                                       first[i], count[i], (int) starts[i]);
+    {
+      NsPangoShapeKey key;
 
-  return TRUE;
+      if (count[i] > 0 && segment_key (plan, i, &key))
+        ns_pango_shape_cache_insert_range (&key, glyphs,
+                                           first[i], count[i], (int) plan->starts[i]);
+    }
 }
 
 static gboolean
@@ -949,47 +955,54 @@ shape_by_segment (const char            *item_text,
                   unsigned int           num_features)
 {
   guint32 starts[NS_PANGO_SHAPE_MAX_SEGMENTS];
-  NsPangoShapeKey keys[NS_PANGO_SHAPE_MAX_SEGMENTS];
   gboolean backwards = item_runs_backwards (analysis);
-  guint n;
+  SegmentPlan plan;
+  guint i;
+  int at = 0;
 
-  n = ns_pango_shape_cache_split (item_text, item_length,
-                                  starts, G_N_ELEMENTS (starts));
-  if (n < 2)
+  plan.item_text = item_text;
+  plan.item_length = item_length;
+  plan.paragraph_text = paragraph_text;
+  plan.paragraph_length = paragraph_length;
+  plan.analysis = analysis;
+  plan.flags = flags;
+  plan.show_flags = show_flags;
+  plan.features = features;
+  plan.num_features = num_features;
+  plan.starts = starts;
+  plan.n = ns_pango_shape_cache_split (item_text, item_length,
+                                       starts, G_N_ELEMENTS (starts));
+
+  if (plan.n < 2)
     return FALSE;
 
-  if (!segment_keys_init (keys, starts, n, item_text, item_length,
-                          paragraph_text, paragraph_length,
-                          analysis, flags, show_flags, features, num_features))
-    return FALSE;
+  if (ns_pango_shape_cache_verifying ())
+    i = 0;
+  else
+    for (i = 0; i < plan.n; i++)
+      {
+        guint seg = backwards ? plan.n - 1 - i : i;
+        NsPangoShapeKey key;
+        int before = at;
 
-  if (!ns_pango_shape_cache_verifying ())
-    {
-      int at = 0;
-      guint i;
+        if (!segment_key (&plan, seg, &key))
+          break;
+        if (!ns_pango_shape_cache_lookup_at (&key, glyphs, at, (int) starts[seg]))
+          break;
 
-      for (i = 0; i < n; i++)
-        {
-          guint seg = backwards ? n - 1 - i : i;
-          int before = at;
+        at = glyphs->num_glyphs;
+        if (at == before)
+          break;
+      }
 
-          if (!ns_pango_shape_cache_lookup_at (&keys[seg], glyphs, at,
-                                               (int) starts[seg]))
-            break;
-          at = glyphs->num_glyphs;
-          if (at == before)
-            break;
-        }
-
-      if (i == n)
-        return TRUE;
-    }
+  if (i == plan.n)
+    return TRUE;
 
   shape_internal_uncached (item_text, item_length,
                            paragraph_text, paragraph_length,
                            analysis, log_attrs, num_chars, glyphs, flags);
 
-  insert_segments (keys, starts, n, item_length, glyphs, backwards);
+  insert_segments (&plan, glyphs, backwards);
 
   return TRUE;
 }
