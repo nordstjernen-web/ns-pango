@@ -55,7 +55,7 @@ lopsided:
 | `src/js_intl.c` | 2 | `Intl.Segmenter`, via `ns_pango_get_log_attrs` |
 | `src/font.c` | 2 | telling the fontmap a web font arrived |
 | `src/net.c` | 1 | `ns_pango_version_string` in a diagnostics dump |
-| `src/appmain.c` | 1 | `ns_pango_cache_get_stats` for the perf readout |
+| `src/appmain.c` | 2 | `ns_pango_cache_get_stats` and `ns_pango_break_cache_stats` for the perf readout |
 
 Grouped by what it is asking for:
 
@@ -164,9 +164,45 @@ today is not in the layout engine:
 So parallel layout would today either race in the fontmap or lose most of the
 shape cache while multiplying font memory. **Locking the fontconfig fontmap's
 caches is the prerequisite**, and it is the one piece of work that would unlock
-real parallel text layout. The buffer and cache-lock work already done removes
-the two bottlenecks behind it: on four cores, layout throughput with the cache
-serving now scales 3.2x where it scaled 2.4x.
+real parallel text layout.
+
+`ns-text-check scale` measures how far it gets without that. On four cores,
+before the caches were sharded:
+
+| threads | layouts/s | speedup |
+| --- | --- | --- |
+| 1 | 36 796 | 1.00x |
+| 2 | 55 063 | 1.50x |
+| 4 | 49 921 | 1.36x |
+
+Four threads were slower than two, and — the number that matters — four
+threads with the cache serving ran no faster than four threads with
+`NS_PANGO_SHAPE_CACHE=0` (49 921 against 50 820). Every thread missed on
+everything, because of the per-thread fonts above; every miss took the one
+lock exclusively to insert; and the memcpy of each glyph string ran with all
+the other threads queued behind it. The cache had become a semaphore.
+
+Sharding both caches sixteen ways on the high bits of the hash — which the
+hash tables' own bucket index does not use — leaves the single-threaded path
+alone and gives:
+
+| threads | layouts/s | speedup |
+| --- | --- | --- |
+| 1 | 36 166 | 1.00x |
+| 2 | 60 398 | 1.67x |
+| 4 | 100 486 | 2.78x |
+
+Reader locks needed splitting as much as writer locks did: a `GRWLock` reader
+lock is an atomic read-modify-write, so one lock for the whole cache put every
+lookup on every thread onto the same cache line whether or not any of them
+ever wrote.
+
+What is left between 2.78x and 4x is the per-thread fontmap: four threads
+still shape everything four times over and hold four copies of it. That is the
+fontconfig locking work, and it is still the prerequisite. Note also that none
+of this helps Northstar yet — its layout runs on the main loop thread, so
+these are the numbers a future parallel layout would start from, not a speedup
+the browser sees today.
 
 ## Replacing this with an API-compatible implementation
 
@@ -274,11 +310,35 @@ locking the fontconfig fontmap. If a rewrite does happen, start with the
 differential harness, keep fontconfig, and treat "identical output on a page
 corpus" as the acceptance test rather than "passes the spec".
 
+## Where the time goes now
+
+Northstar laying a 200 KB page out headless, by inclusive share of the whole
+process — parse, cascade, layout, paint and teardown included:
+
+| | share | what is left to take |
+| --- | --- | --- |
+| `ns_pango_layout_check_lines` | 59.5% | — |
+| HarfBuzz shaping | 28.6% | nothing: each distinct run is shaped once and the cache serves the rest |
+| `ns_pango_default_break` | 9.2% | nothing: 1120 distinct paragraphs, one pass each, 2492 further passes served from cache |
+| `ns_pango_itemize_with_font` | 7.1% | **the last uncached block** |
+| glyph extents | 2.4% | little |
+
+Itemization is where a fourth cache would go. It is a pure function of the
+text, the base direction, the itemisation attributes and the context's font
+description, language and gravity — but the items it returns carry an analysis
+that points into the attribute list, and the line breaker splits and mutates
+them, so a cache has to hand out copies and the key has to cover the fontmap
+serial. That is a much wider correctness surface than the three caches here,
+each of which is keyed on bytes and returns a value nothing downstream writes
+to.
+
 ## Known unresolved
 
 - `pangofc-fontmap.c`'s caches are unlocked; a shared fontmap races. This is
   the prerequisite for parallel layout, and the reason
-  `ns_pango_cairo_font_map_get_default()` is per-thread.
+  `ns_pango_cairo_font_map_get_default()` is per-thread. It is also what caps
+  `ns-text-check scale` at 2.78x on four cores: threads still shape everything
+  once per thread because they cannot share a font.
 - ThreadSanitizer reports races inside fontconfig's own `FcFontSetMatch` and
   `FcFontSetSort` when two fontmaps match concurrently. They do not currently
   change output, and AddressSanitizer is clean.
