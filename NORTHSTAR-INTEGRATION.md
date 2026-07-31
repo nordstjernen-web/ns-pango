@@ -55,7 +55,7 @@ lopsided:
 | `src/js_intl.c` | 2 | `Intl.Segmenter`, via `ns_pango_get_log_attrs` |
 | `src/font.c` | 2 | telling the fontmap a web font arrived |
 | `src/net.c` | 1 | `ns_pango_version_string` in a diagnostics dump |
-| `src/appmain.c` | 2 | `ns_pango_cache_get_stats` and `ns_pango_break_cache_stats` for the perf readout |
+| `src/appmain.c` | 3 | `ns_pango_cache_get_stats`, `ns_pango_break_cache_stats` and `ns_pango_item_cache_stats` for the perf readout |
 
 Grouped by what it is asking for:
 
@@ -311,24 +311,29 @@ corpus" as the acceptance test rather than "passes the spec".
 ## Where the time goes now
 
 Northstar laying a 200 KB page out headless, by inclusive share of the whole
-process — parse, cascade, layout, paint and teardown included:
+process — parse, cascade, layout, paint and teardown included — before this
+fork's caches and after all three:
 
-| | share | what is left to take |
+| | before | after |
 | --- | --- | --- |
-| `ns_pango_layout_check_lines` | 59.5% | — |
-| HarfBuzz shaping | 28.6% | nothing: each distinct run is shaped once and the cache serves the rest |
-| `ns_pango_default_break` | 9.2% | nothing: 1120 distinct paragraphs, one pass each, 2492 further passes served from cache |
-| `ns_pango_itemize_with_font` | 7.1% | **the last uncached block** |
-| glyph extents | 2.4% | little |
+| whole process | 1.663G instructions | 1.289G |
+| `ns_pango_layout_check_lines` | 59.5% | 48.7% |
+| HarfBuzz shaping | 28.6% | **1.5%** |
+| `ns_pango_default_break` | 9.2% | 14.1% |
+| `ns_pango_itemize_with_font` | 7.1% | 7.5% |
+| glyph extents | 2.4% | little in it |
 
-Itemization is where a fourth cache would go. It is a pure function of the
-text, the base direction, the itemisation attributes and the context's font
-description, language and gravity — but the items it returns carry an analysis
-that points into the attribute list, and the line breaker splits and mutates
-them, so a cache has to hand out copies and the key has to cover the fontmap
-serial. That is a much wider correctness surface than the three caches here,
-each of which is keyed on bytes and returns a value nothing downstream writes
-to.
+Shaping is the one that moved, and it moved because of *what* was cached rather
+than how much: a word rather than an item. Read the two right-hand rows with
+care — breaking and itemising are a larger fraction of a total that is a fifth
+smaller, not more work than before. Both are already served about two visits in
+three; what is left of them is the first visit to each distinct paragraph, which
+nothing avoids.
+
+The three caches are the three passes a browser repeats over one paragraph —
+break, itemise, shape — and each is keyed on the bytes plus whatever stands in
+for the rest: nothing at all for breaking, the context's serial for itemising,
+the font for shaping.
 
 ## Known unresolved
 
