@@ -825,6 +825,175 @@ shape_internal_uncached (const char          *item_text,
     }
 }
 
+/* HarfBuzz emits a run in visual order, so an item that reads right to left
+ * comes back with its last word first. Whichever way round it is, the glyphs
+ * of one word stay together -- that is what the cut rule guarantees -- so the
+ * pieces need only be walked in the order the shaper put them.
+ */
+static gboolean
+item_runs_backwards (const NsPangoAnalysis *analysis)
+{
+  return ((analysis->level % 2) != 0) !=
+         (NS_PANGO_GRAVITY_IS_IMPROPER (analysis->gravity) != 0);
+}
+
+static gboolean
+segment_keys_init (NsPangoShapeKey       *keys,
+                   const guint32         *starts,
+                   guint                  n,
+                   const char            *item_text,
+                   int                    item_length,
+                   const char            *paragraph_text,
+                   int                    paragraph_length,
+                   const NsPangoAnalysis *analysis,
+                   NsPangoShapeFlags      flags,
+                   guint                  show_flags,
+                   const hb_feature_t    *features,
+                   unsigned int           num_features)
+{
+  for (guint i = 0; i < n; i++)
+    {
+      int len = (int) ((i + 1 < n ? starts[i + 1] : (guint32) item_length) - starts[i]);
+
+      if (!ns_pango_shape_cache_key_init (&keys[i], analysis,
+                                          item_text + starts[i], len,
+                                          paragraph_text, paragraph_length,
+                                          flags, show_flags,
+                                          NS_PANGO_TEXT_TRANSFORM_NONE,
+                                          NS_PANGO_SHAPE_HYPHEN_NONE,
+                                          features, num_features))
+        return FALSE;
+    }
+
+  return TRUE;
+}
+
+/* Divides a glyph string that was shaped whole along the item's cut points,
+ * and stores each piece. Returns FALSE without storing anything if the glyphs
+ * of a piece are not one unbroken stretch of the string, which is the
+ * assumption the cut rule is there to hold up.
+ */
+static gboolean
+insert_segments (const NsPangoShapeKey    *keys,
+                 const guint32            *starts,
+                 guint                     n,
+                 int                       item_length,
+                 const NsPangoGlyphString *glyphs,
+                 gboolean                  backwards)
+{
+  int first[NS_PANGO_SHAPE_MAX_SEGMENTS];
+  int count[NS_PANGO_SHAPE_MAX_SEGMENTS];
+  int seen = 0;
+
+  for (guint i = 0; i < n; i++)
+    first[i] = count[i] = 0;
+
+  for (int g = 0; g < glyphs->num_glyphs; g++)
+    {
+      int cluster = glyphs->log_clusters[g];
+      guint seg;
+
+      if (cluster < 0 || cluster >= item_length)
+        return FALSE;
+
+      for (seg = n; seg > 0; seg--)
+        if ((guint32) cluster >= starts[seg - 1])
+          break;
+      if (seg == 0)
+        return FALSE;
+      seg--;
+
+      if (count[seg] == 0)
+        first[seg] = g;
+      else if (first[seg] + count[seg] != g)
+        return FALSE;
+      count[seg]++;
+    }
+
+  for (guint i = 0; i < n; i++)
+    seen += count[i];
+  if (seen != glyphs->num_glyphs)
+    return FALSE;
+
+  /* The pieces have to come out of the string in the order the shaper laid
+   * them down, or reading them back would reorder the item.
+   */
+  for (guint i = 1; i < n; i++)
+    {
+      guint a = backwards ? n - i : i - 1;
+      guint b = backwards ? n - i - 1 : i;
+
+      if (count[a] > 0 && count[b] > 0 && first[a] > first[b])
+        return FALSE;
+    }
+
+  for (guint i = 0; i < n; i++)
+    ns_pango_shape_cache_insert_range (&keys[i], glyphs,
+                                       first[i], count[i], (int) starts[i]);
+
+  return TRUE;
+}
+
+static gboolean
+shape_by_segment (const char            *item_text,
+                  int                    item_length,
+                  const char            *paragraph_text,
+                  int                    paragraph_length,
+                  const NsPangoAnalysis *analysis,
+                  NsPangoLogAttr        *log_attrs,
+                  int                    num_chars,
+                  NsPangoGlyphString    *glyphs,
+                  NsPangoShapeFlags      flags,
+                  guint                  show_flags,
+                  const hb_feature_t    *features,
+                  unsigned int           num_features)
+{
+  guint32 starts[NS_PANGO_SHAPE_MAX_SEGMENTS];
+  NsPangoShapeKey keys[NS_PANGO_SHAPE_MAX_SEGMENTS];
+  gboolean backwards = item_runs_backwards (analysis);
+  guint n;
+
+  n = ns_pango_shape_cache_split (item_text, item_length,
+                                  starts, G_N_ELEMENTS (starts));
+  if (n < 2)
+    return FALSE;
+
+  if (!segment_keys_init (keys, starts, n, item_text, item_length,
+                          paragraph_text, paragraph_length,
+                          analysis, flags, show_flags, features, num_features))
+    return FALSE;
+
+  if (!ns_pango_shape_cache_verifying ())
+    {
+      int at = 0;
+      guint i;
+
+      for (i = 0; i < n; i++)
+        {
+          guint seg = backwards ? n - 1 - i : i;
+          int before = at;
+
+          if (!ns_pango_shape_cache_lookup_at (&keys[seg], glyphs, at,
+                                               (int) starts[seg]))
+            break;
+          at = glyphs->num_glyphs;
+          if (at == before)
+            break;
+        }
+
+      if (i == n)
+        return TRUE;
+    }
+
+  shape_internal_uncached (item_text, item_length,
+                           paragraph_text, paragraph_length,
+                           analysis, log_attrs, num_chars, glyphs, flags);
+
+  insert_segments (keys, starts, n, item_length, glyphs, backwards);
+
+  return TRUE;
+}
+
 static void
 ns_pango_shape_internal (const char          *item_text,
                       int                  item_length,
@@ -838,6 +1007,9 @@ ns_pango_shape_internal (const char          *item_text,
 {
   NsPangoShapeKey key;
   gboolean cacheable;
+  guint show_flags;
+  NsPangoTextTransform transform;
+  NsPangoShapeHyphen hyphen;
   hb_feature_t features[32];
   unsigned int num_features = 0;
 
@@ -863,12 +1035,27 @@ ns_pango_shape_internal (const char          *item_text,
   ns_pango_analysis_collect_features (analysis, features,
                                       G_N_ELEMENTS (features), &num_features);
 
+  show_flags = find_show_flags (analysis);
+  transform = find_text_transform (analysis);
+  hyphen = find_hyphen (analysis, log_attrs, num_chars);
+
+  /* Both of these make an item's shaping depend on where it ends rather than
+   * only on what it says: a hyphen is appended to the last piece, and a
+   * transform is fed to HarfBuzz character by character with no paragraph
+   * around it, capitalising by an offset counted from the item's own start.
+   * Neither survives being cut up, so neither is.
+   */
+  if (transform == NS_PANGO_TEXT_TRANSFORM_NONE &&
+      hyphen == NS_PANGO_SHAPE_HYPHEN_NONE &&
+      shape_by_segment (item_text, item_length,
+                        paragraph_text, paragraph_length,
+                        analysis, log_attrs, num_chars, glyphs, flags,
+                        show_flags, features, num_features))
+    return;
+
   cacheable = ns_pango_shape_cache_key_init (&key, analysis, item_text, item_length,
                                              paragraph_text, paragraph_length,
-                                             flags,
-                                             find_show_flags (analysis),
-                                             find_text_transform (analysis),
-                                             find_hyphen (analysis, log_attrs, num_chars),
+                                             flags, show_flags, transform, hyphen,
                                              features, num_features);
 
   if (cacheable &&

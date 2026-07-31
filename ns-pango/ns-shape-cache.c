@@ -176,7 +176,7 @@ isolated_ideograph (gunichar ch)
 }
 
 static gboolean
-boundary_char (gunichar ch)
+space_boundary_char (gunichar ch)
 {
   /* Two space characters are not boundaries, for the same reason CJK punctuation
    * is not: U+3000 IDEOGRAPHIC SPACE is what a CJK font's contextual spacing
@@ -191,8 +191,13 @@ boundary_char (gunichar ch)
    */
   return ch == '\t' || ch == '\n' || ch == '\v' || ch == '\f' || ch == '\r' ||
          ch == 0x2028 || ch == 0x2029 ||
-         g_unichar_type (ch) == G_UNICODE_SPACE_SEPARATOR ||
-         isolated_ideograph (ch);
+         g_unichar_type (ch) == G_UNICODE_SPACE_SEPARATOR;
+}
+
+static gboolean
+boundary_char (gunichar ch)
+{
+  return space_boundary_char (ch) || isolated_ideograph (ch);
 }
 
 static gboolean
@@ -204,6 +209,65 @@ attaches_to_neighbour (gunichar ch)
          type == G_UNICODE_SPACING_MARK ||
          type == G_UNICODE_ENCLOSING_MARK ||
          type == G_UNICODE_FORMAT;
+}
+
+/* Where an item may be cut so that each piece shapes on its own exactly as it
+ * does inside the whole. The rule is the one context_independent() applies to
+ * an item's outer edges, turned inward: cut before a character whose left
+ * neighbour is a boundary, so that both sides of every cut sit next to one.
+ *
+ * A run of spaces stays with the word before it rather than starting the next
+ * piece, because the line breaker leaves trailing spaces on the line it broke
+ * -- so "keeps " is what a wrapped line ends with, and what the paragraph
+ * contains. Cutting the other way would make those two different pieces.
+ *
+ * The cut must be a function of the bytes alone and of nothing around them,
+ * or the same word would be cut differently depending on which item it turned
+ * up in, and the pieces would never match.
+ */
+static gboolean
+segment_starts_here (const char *p,
+                     const char *item_text)
+{
+  gunichar here, before;
+
+  if (p <= item_text)
+    return FALSE;
+
+  here = g_utf8_get_char (p);
+  if (attaches_to_neighbour (here) || space_boundary_char (here))
+    return FALSE;
+
+  before = g_utf8_get_char (g_utf8_prev_char (p));
+
+  return boundary_char (before);
+}
+
+guint
+ns_pango_shape_cache_split (const char *item_text,
+                            int         item_length,
+                            guint32    *starts,
+                            guint       max_segments)
+{
+  const char *end = item_text + item_length;
+  const char *p;
+  guint n = 0;
+
+  if (item_length <= 0)
+    return 0;
+
+  starts[n++] = 0;
+
+  for (p = g_utf8_next_char (item_text); p < end; p = g_utf8_next_char (p))
+    {
+      if (!segment_starts_here (p, item_text))
+        continue;
+      if (n == max_segments)
+        return 0;
+      starts[n++] = (guint32) (p - item_text);
+    }
+
+  return n;
 }
 
 /* @trailing_edge_is_final says the shaper will not see any of the following
@@ -423,6 +487,43 @@ copy_run_to_glyphs (const CachedRun    *run,
           run->num_glyphs * sizeof (int));
 }
 
+/* Appends a cached piece to a glyph string being assembled from several, with
+ * its log clusters put back where they sit in the whole item.
+ */
+gboolean
+ns_pango_shape_cache_lookup_at (const NsPangoShapeKey *key,
+                                NsPangoGlyphString    *glyphs,
+                                int                    at_glyph,
+                                int                    byte_offset)
+{
+  ShapeShard *shard = &shards[NS_SHAPE_CACHE_SHARD (key->hash)];
+  CachedRun *run;
+
+  g_rw_lock_reader_lock (&shard->lock);
+
+  run = shard->table != NULL ? g_hash_table_lookup (shard->table, key) : NULL;
+  if (run == NULL)
+    {
+      g_rw_lock_reader_unlock (&shard->lock);
+      g_atomic_int_inc (&cache_misses);
+      return FALSE;
+    }
+
+  g_atomic_int_set (&run->read, TRUE);
+
+  ns_pango_glyph_string_set_size (glyphs, at_glyph + run->num_glyphs);
+  memcpy (glyphs->glyphs + at_glyph, run->glyphs,
+          run->num_glyphs * sizeof (NsPangoGlyphInfo));
+  for (int i = 0; i < run->num_glyphs; i++)
+    glyphs->log_clusters[at_glyph + i] = run->log_clusters[i] + byte_offset;
+
+  g_rw_lock_reader_unlock (&shard->lock);
+
+  g_atomic_int_inc (&cache_hits);
+
+  return TRUE;
+}
+
 gboolean
 ns_pango_shape_cache_lookup (const NsPangoShapeKey *key,
                              NsPangoGlyphString    *glyphs)
@@ -540,6 +641,53 @@ make_room (ShapeShard *shard)
       g_hash_table_remove_all (shard->table);
       shard->bytes = 0;
     }
+}
+
+/* Stores one piece of an item that was shaped whole, with its log clusters
+ * moved to be relative to the piece, so that it reads back the same whatever
+ * item it is later found in.
+ */
+void
+ns_pango_shape_cache_insert_range (const NsPangoShapeKey    *key,
+                                   const NsPangoGlyphString *glyphs,
+                                   int                       first_glyph,
+                                   int                       n_glyphs,
+                                   int                       byte_offset)
+{
+  ShapeShard *shard = &shards[NS_SHAPE_CACHE_SHARD (key->hash)];
+  CachedRun *run;
+
+  if (n_glyphs <= 0)
+    return;
+
+  run = g_new (CachedRun, 1);
+  run->num_glyphs = n_glyphs;
+  run->read = FALSE;
+  run->glyphs = g_memdup2 (glyphs->glyphs + first_glyph,
+                           n_glyphs * sizeof (NsPangoGlyphInfo));
+  run->log_clusters = g_new (int, n_glyphs);
+  for (int i = 0; i < n_glyphs; i++)
+    run->log_clusters[i] = glyphs->log_clusters[first_glyph + i] - byte_offset;
+
+  g_rw_lock_writer_lock (&shard->lock);
+
+  if (G_UNLIKELY (shard->table == NULL))
+    shard->table = g_hash_table_new_full (key_hash, key_equal, key_free, run_free);
+  else
+    make_room (shard);
+
+  {
+    const CachedRun *old = g_hash_table_lookup (shard->table, key);
+
+    if (old != NULL)
+      shard->bytes -= MIN (run_size (old, key->text_length), shard->bytes);
+  }
+
+  shard->bytes += run_size (run, key->text_length);
+
+  g_hash_table_replace (shard->table, key_dup_owned (key), run);
+
+  g_rw_lock_writer_unlock (&shard->lock);
 }
 
 void

@@ -98,6 +98,33 @@ gboolean          ns_pango_shape_cache_lookup    (const NsPangoShapeKey *key,
 void              ns_pango_shape_cache_insert    (const NsPangoShapeKey    *key,
                                                   const NsPangoGlyphString *glyphs);
 
+/* An item is cached a word at a time, not whole. The line breaker cuts an item
+ * wherever a line ends and shapes the piece again, so a paragraph measured
+ * unconstrained and then laid out at a real width shares no key with itself --
+ * which is what kept the hit rate near half. Words do not move when the width
+ * does, so the pieces match whatever the wrap.
+ *
+ * ns_pango_shape_cache_split() reports where an item may be cut; the whole item
+ * is still shaped in one call on a miss, and only then divided.
+ */
+#define NS_PANGO_SHAPE_MAX_SEGMENTS 512
+
+guint             ns_pango_shape_cache_split     (const char *item_text,
+                                                  int         item_length,
+                                                  guint32    *starts,
+                                                  guint       max_segments);
+
+gboolean          ns_pango_shape_cache_lookup_at (const NsPangoShapeKey *key,
+                                                  NsPangoGlyphString    *glyphs,
+                                                  int                    at_glyph,
+                                                  int                    byte_offset);
+
+void              ns_pango_shape_cache_insert_range (const NsPangoShapeKey    *key,
+                                                     const NsPangoGlyphString *glyphs,
+                                                     int                       first_glyph,
+                                                     int                       n_glyphs,
+                                                     int                       byte_offset);
+
 void              ns_pango_shape_cache_font_map_changed (void);
 
 gboolean          ns_pango_shape_cache_matches   (const NsPangoShapeKey    *key,
