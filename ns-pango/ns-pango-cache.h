@@ -51,6 +51,16 @@ void ns_pango_break_cache_stats (guint64 *hits,
                                  guint64 *skipped,
                                  guint64 *entries);
 
+/* And this one holds the items a paragraph was cut into before any of it was
+ * shaped, which depend on the text, the attributes and the context but on no
+ * font the browser can name.
+ */
+NS_PANGO_AVAILABLE_IN_ALL
+void ns_pango_item_cache_stats  (guint64 *hits,
+                                 guint64 *misses,
+                                 guint64 *skipped,
+                                 guint64 *entries);
+
 G_END_DECLS
 
 #endif /* __NS_PANGO_CACHE_H__ */

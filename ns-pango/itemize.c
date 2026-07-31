@@ -34,6 +34,7 @@
 #include "pango-attributes-private.h"
 #include "pango-item-private.h"
 #include "pango-utils-private.h"
+#include "ns-item-cache.h"
 
 #include <hb-ot.h>
 
@@ -1594,11 +1595,30 @@ ns_pango_itemize_with_font (NsPangoContext               *context,
 {
   ItemizeState state;
   int initial_offset;
+  GList *items;
 
   g_return_val_if_fail (context->font_map != NULL, NULL);
 
   if (length == 0 || g_utf8_get_char (text + start_index) == '\0')
     return NULL;
+
+  /* Only when the caller brought no font description of its own: one would
+   * have to be in the key, and the layout that repeats this work does not pass
+   * one -- it puts its font in the attributes instead, which are in the key.
+   *
+   * Serving from the cache leaves @cached_iter where the paragraph before left
+   * it rather than inside this one. That is what itemising would have done too
+   * as far as anything downstream can tell, because the next paragraph opens by
+   * advancing the iterator to its own start, and advancing only ever moves
+   * forward.
+   */
+  if (desc == NULL)
+    {
+      items = ns_pango_item_cache_lookup (context, base_dir, text,
+                                          start_index, length, attrs);
+      if (items != NULL)
+        return items;
+    }
 
   itemize_state_init (&state, context, text, base_dir, start_index, length,
                       attrs, cached_iter, desc);
@@ -1611,7 +1631,13 @@ ns_pango_itemize_with_font (NsPangoContext               *context,
 
   initial_offset = g_utf8_strlen (text, start_index);
 
-  return reorder_items (context, state.result, initial_offset);
+  items = reorder_items (context, state.result, initial_offset);
+
+  if (desc == NULL)
+    ns_pango_item_cache_insert (context, base_dir, text,
+                                start_index, length, attrs, items);
+
+  return items;
 }
 
 /* Apply post-processing steps that may require log attrs.
