@@ -53,6 +53,21 @@
 #define NS_BREAK_CACHE_SHARDS      16
 #define NS_BREAK_CACHE_SHARD(hash) (((hash) >> 27) & (NS_BREAK_CACHE_SHARDS - 1))
 
+/* Which shard a paragraph lands in comes off the top of the hash, and a shard
+ * that takes more than its share evicts sooner than the others. djb2 carries
+ * most of a short string's entropy in the low bits, so it gets an avalanche
+ * step before anything reads the top of it.
+ */
+static inline guint
+mix_hash (guint h)
+{
+  h ^= h >> 16;
+  h *= 0x7feb352du;
+  h ^= h >> 15;
+
+  return h;
+}
+
 typedef struct
 {
   guint       hash;
@@ -141,7 +156,7 @@ hash_text (const char *text,
       hash = hash * 33 + (guchar) text[i];
     }
 
-  *out = hash * 33 + (guint) length;
+  *out = mix_hash (hash * 33 + (guint) length);
 
   return TRUE;
 }

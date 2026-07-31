@@ -52,15 +52,31 @@
  * gets its own NsPangoFont objects too -- and the key names the font, so
  * nothing one thread shapes can be served to another. Threads therefore all
  * miss, all take the lock exclusively to insert, and all serialise behind each
- * other's memcpy: measured over the corpus on four cores, four threads with one
- * table ran no faster than four threads with the cache switched off entirely.
+ * other's memcpy. Measured over the corpus on four cores, one table was worth
+ * 1.9x over no cache at all on one thread and only 1.2x on four.
  *
  * Splitting the table on the high bits of the hash, which the table's own
  * bucket index does not use, gives each shard its own lock. Two threads
- * inserting different runs now only collide one time in NS_SHAPE_CACHE_SHARDS.
+ * inserting different runs now only collide one time in NS_SHAPE_CACHE_SHARDS,
+ * which is a quarter more four-thread throughput and nothing at all on one.
  */
 #define NS_SHAPE_CACHE_SHARDS      16
 #define NS_SHAPE_CACHE_SHARD(hash) (((hash) >> 27) & (NS_SHAPE_CACHE_SHARDS - 1))
+
+/* Which shard a key lands in comes off the top of the hash, and a shard that
+ * takes more than its share evicts sooner than the others. djb2 carries most
+ * of a short string's entropy in the low bits, so it gets an avalanche step
+ * before anything reads the top of it.
+ */
+static inline guint
+mix_hash (guint h)
+{
+  h ^= h >> 16;
+  h *= 0x7feb352du;
+  h ^= h >> 15;
+
+  return h;
+}
 
 typedef struct
 {
@@ -375,7 +391,7 @@ ns_pango_shape_cache_key_init (NsPangoShapeKey       *key,
   hash = hash * 33 + key->hyphen;
   for (guint i = 0; i < n_features; i++)
     hash = hash * 33 + (guint) key->features[i].tag + key->features[i].value;
-  key->hash = hash;
+  key->hash = mix_hash (hash);
 
   return TRUE;
 }
