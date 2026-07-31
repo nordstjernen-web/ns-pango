@@ -25,6 +25,7 @@
 
 #include "ns-shape-cache.h"
 #include "ns-break-cache.h"
+#include "ns-item-cache.h"
 #include "ns-pango-cache.h"
 #include "pango-impl-utils.h"
 
@@ -110,6 +111,10 @@ static gint cache_misses;
 static gint cache_skips;
 static gint skip_font, skip_len, skip_feat, skip_ctx;
 
+/* One variable governs all three caches, which is why the predicate is not
+ * named after this one. NS_PANGO_SHAPE_CACHE is the name it shipped under and
+ * the name the browser sets.
+ */
 static gboolean
 enabled_from_env (void)
 {
@@ -119,7 +124,7 @@ enabled_from_env (void)
 }
 
 gboolean
-ns_pango_shape_cache_enabled (void)
+ns_pango_caches_enabled (void)
 {
   static gint enabled = -1;
   gint value = g_atomic_int_get (&enabled);
@@ -397,7 +402,7 @@ ns_pango_shape_cache_key_init (NsPangoShapeKey       *key,
 {
   guint hash;
 
-  if (!ns_pango_shape_cache_enabled ())
+  if (!ns_pango_caches_enabled ())
     return FALSE;
 
   if (analysis->font == NULL ||
@@ -764,12 +769,39 @@ ns_pango_cache_clear (void)
 {
   drop_shaped_runs ();
   ns_pango_break_cache_clear ();
+  ns_pango_item_cache_clear ();
 }
 
+/* Gives back what nothing has read since the last sweep and keeps the working
+ * set, which is what a browser under memory pressure wants from a page it is
+ * still displaying. ns_pango_cache_clear() is the other end of that: everything,
+ * for a page that has gone away.
+ */
+void
+ns_pango_cache_trim (void)
+{
+  for (guint i = 0; i < NS_SHAPE_CACHE_SHARDS; i++)
+    {
+      g_rw_lock_writer_lock (&shards[i].lock);
+      if (shards[i].table != NULL)
+        drop_unread_entries (&shards[i]);
+      g_rw_lock_writer_unlock (&shards[i].lock);
+    }
+
+  ns_pango_break_cache_trim ();
+  ns_pango_item_cache_trim ();
+}
+
+/* A font arriving invalidates the glyphs outright. It does not invalidate the
+ * items -- they name fonts, but they are keyed on the context's serial, which
+ * has just moved -- so those entries are merely unreachable from here on, and
+ * dropping them is about the memory they hold rather than about correctness.
+ */
 void
 ns_pango_shape_cache_font_map_changed (void)
 {
   drop_shaped_runs ();
+  ns_pango_item_cache_clear ();
 }
 
 void
@@ -794,11 +826,20 @@ ns_pango_cache_get_stats (guint64 *hits,
           g_rw_lock_reader_unlock (&shards[i].lock);
         }
     }
+}
 
-  if (g_getenv ("NS_PANGO_CACHE_DEBUG") != NULL)
-    g_printerr ("[ns-pango] skips: font=%d len=%d features=%d context=%d\n",
-                g_atomic_int_get (&skip_font),
-                g_atomic_int_get (&skip_len),
-                g_atomic_int_get (&skip_feat),
-                g_atomic_int_get (&skip_ctx));
+/* Why runs were turned away, for whoever wants to print it. This used to be a
+ * g_printerr() inside the getter above, which made asking for the statistics
+ * write to stderr.
+ */
+void
+ns_pango_cache_get_skips (guint64 *no_font,
+                          guint64 *too_long,
+                          guint64 *too_many_features,
+                          guint64 *context_dependent)
+{
+  if (no_font) *no_font = (guint) g_atomic_int_get (&skip_font);
+  if (too_long) *too_long = (guint) g_atomic_int_get (&skip_len);
+  if (too_many_features) *too_many_features = (guint) g_atomic_int_get (&skip_feat);
+  if (context_dependent) *context_dependent = (guint) g_atomic_int_get (&skip_ctx);
 }

@@ -39,6 +39,8 @@
  *   ns-text-check spacing         check word-spacing against what CSS specifies
  *   ns-text-check synthesis       check every family's advances agree between
  *                                 HarfBuzz, which measures, and cairo, which draws
+ *   ns-text-check reuse           check a paragraph comes out the same whatever
+ *                                 the process laid out before it
  */
 
 #include <ns-pango/pangocairo.h>
@@ -245,6 +247,19 @@ report_stats (void)
   fprintf (stderr, "hits=%llu misses=%llu skipped=%llu entries=%llu\n",
            (unsigned long long) hits, (unsigned long long) misses,
            (unsigned long long) skipped, (unsigned long long) entries);
+
+  /* The library keeps the reasons but no longer prints them itself, so that
+   * asking it for statistics does not write to stderr.
+   */
+  if (g_getenv ("NS_PANGO_CACHE_DEBUG") != NULL)
+    {
+      guint64 no_font = 0, too_long = 0, features = 0, context = 0;
+
+      ns_pango_cache_get_skips (&no_font, &too_long, &features, &context);
+      fprintf (stderr, "[ns-pango] skips: font=%llu len=%llu features=%llu context=%llu\n",
+               (unsigned long long) no_font, (unsigned long long) too_long,
+               (unsigned long long) features, (unsigned long long) context);
+    }
 }
 
 /* Two passes, so that everything the first pass shaped is served from the cache
@@ -280,6 +295,93 @@ do_dump (NsPangoContext *context)
   report_stats ();
 
   return 0;
+}
+
+/* What a paragraph looks like must not depend on what the process laid out
+ * before it. That is a stronger statement than "the cache does not change the
+ * glyphs", and it is the one the cache broke: a piece was stored beside one
+ * word and served beside another, so a paragraph came out narrow only when
+ * some earlier paragraph had put a different word after the same one.
+ *
+ * These share words with each other on purpose, and they are laid out with
+ * every neighbour a word can have. A font whose kerning reaches across the
+ * space -- Liberation Sans and Liberation Serif do, and they are what
+ * fontconfig hands out for Arial and Times New Roman -- fails this without the
+ * shaper's word on where an item may be cut.
+ */
+/* Named rather than generic, because the generic families resolve to DejaVu on
+ * most Linux systems and DejaVu's kerning does not reach across the space.
+ * These three are what a page actually asks for, and fontconfig answers them
+ * with the Liberation family, which does. Where they are not installed
+ * fontconfig substitutes something, and the check still runs -- it just proves
+ * less.
+ */
+static const char *reuse_fonts[] = {
+  "Arial 16",
+  "Times New Roman 18",
+  "Helvetica 14",
+  "sans 16",
+  "serif 22",
+};
+
+static const char *reuse_texts[] = {
+  "Type A",  "Type of",  "Type W",  "Type thing",
+  "T A",     "T o",      "T W",     "T i",
+  "A T",     "of of",    "o o",     "W A",
+  "Yo Yo",   "Yo A",     "LT A",    "LT o",
+  "the quick brown fox", "the lazy dog", "the A", "the W",
+  "AV To Wo", "AV A", "V. A", "P, A",
+};
+
+static int
+do_reuse (NsPangoContext *context)
+{
+  const Mode *mode = &modes[0];
+  int failures = 0;
+
+  for (unsigned f = 0; f < G_N_ELEMENTS (reuse_fonts); f++)
+    for (unsigned t = 0; t < G_N_ELEMENTS (reuse_texts); t++)
+      {
+        GString *alone = g_string_new (NULL);
+        GString *after = g_string_new (NULL);
+        NsPangoLayout *layout;
+
+        /* On its own, with nothing cached that this text could pick up. */
+        ns_pango_cache_clear ();
+        layout = build_layout (context, reuse_fonts[f], reuse_texts[t], mode);
+        dump_layout (alone, "alone", reuse_fonts[f], mode, layout);
+        g_object_unref (layout);
+
+        /* And again, behind every other text in the set. */
+        ns_pango_cache_clear ();
+        for (unsigned u = 0; u < G_N_ELEMENTS (reuse_texts); u++)
+          {
+            layout = build_layout (context, reuse_fonts[f], reuse_texts[u], mode);
+            ns_pango_layout_get_line_count (layout);
+            g_object_unref (layout);
+          }
+
+        layout = build_layout (context, reuse_fonts[f], reuse_texts[t], mode);
+        dump_layout (after, "alone", reuse_fonts[f], mode, layout);
+        g_object_unref (layout);
+
+        if (strcmp (alone->str, after->str) != 0)
+          {
+            fprintf (stderr,
+                     "\"%s\" in %s came out differently behind the other texts\n",
+                     reuse_texts[t], reuse_fonts[f]);
+            failures++;
+          }
+
+        g_string_free (alone, TRUE);
+        g_string_free (after, TRUE);
+      }
+
+  printf ("checked %zu texts in %zu fonts against a warm cache: %s\n",
+          G_N_ELEMENTS (reuse_texts), G_N_ELEMENTS (reuse_fonts),
+          failures ? "MISMATCH" : "every one identical");
+
+  return failures ? 1 : 0;
 }
 
 /* The shape cache is one table for the whole process, and Northstar shapes off
@@ -768,10 +870,12 @@ main (int    argc,
     status = do_spacing (context);
   else if (strcmp (command, "synthesis") == 0)
     status = do_synthesis (context);
+  else if (strcmp (command, "reuse") == 0)
+    status = do_reuse (context);
   else
     {
       fprintf (stderr, "usage: %s [dump|bench [iterations]|threads [count]|"
-                       "scale [threads] [iterations]|spacing|synthesis]\n",
+                       "scale [threads] [iterations]|spacing|synthesis|reuse]\n",
                argv[0]);
       status = 2;
     }

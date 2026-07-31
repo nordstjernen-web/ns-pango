@@ -45,7 +45,7 @@ jobs:
             ${{ matrix.cc }} pkg-config meson ninja-build \
             libglib2.0-dev libcairo2-dev libharfbuzz-dev libfribidi-dev \
             libfontconfig-dev libfreetype-dev libthai-dev \
-            fonts-dejavu-core fonts-noto-cjk
+            fonts-dejavu-core fonts-noto-cjk fonts-liberation
 
       - name: Report dependency versions
         run: |
@@ -161,6 +161,14 @@ jobs:
         run: |
           builddir/tests/ns-text-check threads 8
           NS_PANGO_SHAPE_CACHE=0 builddir/tests/ns-text-check threads 8
+
+      # A paragraph must not come out differently because of what the process
+      # laid out before it. Liberation Sans and Liberation Serif -- which
+      # fontconfig hands out for Arial and Times New Roman, hence the package
+      # above -- kern the space against the word after it, so a cached piece
+      # that ends in one carries a width that belongs to another paragraph.
+      - name: Check a warm cache changes nothing
+        run: builddir/tests/ns-text-check reuse
 
       # word-spacing has to add space where CSS Text says it does and nowhere
       # else, in every script and both directions.

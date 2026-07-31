@@ -336,6 +336,58 @@ find_hyphen (const NsPangoAnalysis *analysis,
   return hyphen;
 }
 
+/* Where an item may be cut, and where HarfBuzz says it may not.
+ *
+ * The cut rule reasons about Unicode -- a space on either side, an ideograph
+ * that neither joins nor ligates -- and Unicode does not know what the font
+ * does. Liberation Sans, which fontconfig hands out for Arial, kerns the space
+ * against the letter that follows it and puts the adjustment on the space, so a
+ * piece ending "Type " carries a width that depends on the word after it. The
+ * font is the only thing that can answer this, and HarfBuzz asks it for us:
+ * a cluster carrying HB_GLYPH_FLAG_UNSAFE_TO_CONCAT is one where changing the
+ * text on one side changes the glyphs on the other, which is exactly what a
+ * piece stored on its own and served next to different text would do.
+ *
+ * @starts is the list of candidate cut offsets, ascending; @unsafe[i] is set
+ * when the shaper marked the cluster starting at @starts[i].
+ */
+typedef struct
+{
+  const guint32 *starts;
+  guint          n;
+  guint8         unsafe[NS_PANGO_SHAPE_MAX_SEGMENTS];
+} CutSafety;
+
+static void
+mark_unsafe_cut (CutSafety *cuts,
+                 int        cluster)
+{
+  guint lo = 0, hi = cuts->n;
+
+  if (cluster < 0)
+    return;
+
+  while (lo < hi)
+    {
+      guint mid = (lo + hi) / 2;
+
+      if (cuts->starts[mid] < (guint32) cluster)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+
+  if (lo < cuts->n && cuts->starts[lo] == (guint32) cluster)
+    cuts->unsafe[lo] = TRUE;
+}
+
+static void
+mark_every_cut_unsafe (CutSafety *cuts)
+{
+  for (guint i = 0; i < cuts->n; i++)
+    cuts->unsafe[i] = TRUE;
+}
+
 static gboolean
 font_has_color (hb_font_t *font)
 {
@@ -408,7 +460,8 @@ ns_pango_hb_shape (const char          *item_text,
                 NsPangoLogAttr        *log_attrs,
                 int                  num_chars,
                 NsPangoGlyphString    *glyphs,
-                NsPangoShapeFlags      flags)
+                NsPangoShapeFlags      flags,
+                CutSafety           *cuts)
 {
   NsPangoHbShapeContext context = { 0, };
   hb_buffer_flags_t hb_buffer_flags;
@@ -446,6 +499,13 @@ ns_pango_hb_shape (const char          *item_text,
 
   if (context.show_flags & NS_PANGO_SHOW_IGNORABLES)
     hb_buffer_flags |= HB_BUFFER_FLAG_PRESERVE_DEFAULT_IGNORABLES;
+
+  /* Asked for only when something is going to cut this result up: HarfBuzz
+   * does not produce the flag by default because working it out costs
+   * something, and nothing but the shape cache reads it.
+   */
+  if (cuts != NULL)
+    hb_buffer_flags |= HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT;
 
   /* setup buffer */
 
@@ -564,6 +624,9 @@ ns_pango_hb_shape (const char          *item_text,
       glyphs->log_clusters[i] = hb_glyph->cluster - item_offset;
       infos[i].attr.is_cluster_start = glyphs->log_clusters[i] != last_cluster;
       infos[i].attr.is_color = font_is_color && glyph_has_color (hb_font, hb_glyph->codepoint);
+      if (cuts != NULL &&
+          (hb_glyph_info_get_glyph_flags (hb_glyph) & HB_GLYPH_FLAG_UNSAFE_TO_CONCAT) != 0)
+        mark_unsafe_cut (cuts, glyphs->log_clusters[i]);
       hb_glyph++;
       last_cluster = glyphs->log_clusters[i];
     }
@@ -657,7 +720,8 @@ shape_internal_uncached (const char          *item_text,
                       NsPangoLogAttr        *log_attrs,
                       int                  num_chars,
                       NsPangoGlyphString    *glyphs,
-                      NsPangoShapeFlags      flags)
+                      NsPangoShapeFlags      flags,
+                      CutSafety           *cuts)
 {
   int i;
   int last_cluster;
@@ -684,7 +748,7 @@ shape_internal_uncached (const char          *item_text,
                       paragraph_text, paragraph_length,
                       analysis,
                       log_attrs, num_chars,
-                      glyphs, flags);
+                      glyphs, flags, cuts);
 
       if (G_UNLIKELY (glyphs->num_glyphs == 0))
         {
@@ -722,6 +786,10 @@ shape_internal_uncached (const char          *item_text,
 
   if (G_UNLIKELY (!glyphs->num_glyphs))
     {
+      /* Nothing asked the font, so nothing knows where this may be cut. */
+      if (cuts != NULL)
+        mark_every_cut_unsafe (cuts);
+
       fallback_shape (item_text, item_length, analysis, glyphs);
       if (G_UNLIKELY (!glyphs->num_glyphs))
         return;
@@ -837,6 +905,34 @@ item_runs_backwards (const NsPangoAnalysis *analysis)
          (NS_PANGO_GRAVITY_IS_IMPROPER (analysis->gravity) != 0);
 }
 
+/* Field by field, and not by total advance: two different glyph strings add up
+ * to the same width often enough that a width check proves nothing.
+ */
+static gboolean
+glyph_strings_agree (const NsPangoGlyphString *a,
+                     const NsPangoGlyphString *b)
+{
+  if (a->num_glyphs != b->num_glyphs)
+    return FALSE;
+
+  for (int i = 0; i < a->num_glyphs; i++)
+    {
+      const NsPangoGlyphInfo *ga = &a->glyphs[i];
+      const NsPangoGlyphInfo *gb = &b->glyphs[i];
+
+      if (ga->glyph != gb->glyph ||
+          ga->geometry.width != gb->geometry.width ||
+          ga->geometry.x_offset != gb->geometry.x_offset ||
+          ga->geometry.y_offset != gb->geometry.y_offset ||
+          ga->attr.is_cluster_start != gb->attr.is_cluster_start ||
+          ga->attr.is_color != gb->attr.is_color ||
+          a->log_clusters[i] != b->log_clusters[i])
+        return FALSE;
+    }
+
+  return TRUE;
+}
+
 /* Everything a piece needs to be looked up or stored, gathered once so that
  * the keys themselves can be built one at a time. A key is a couple of hundred
  * bytes, and an item can hold hundreds of pieces, so an array of them would put
@@ -880,15 +976,27 @@ segment_key (const SegmentPlan *plan,
  * one unbroken stretch of the string, or if the pieces do not lie in the order
  * the shaper laid them down -- both of which the cut rule is there to hold up,
  * and neither of which is worth trusting without looking.
+ *
+ * A piece is stored only when the shaper agreed to both of the cuts that made
+ * it. The cuts at the item's own two ends are not the shaper's to judge: what
+ * lies beyond them is a different item, and whether the piece may be lifted out
+ * of this paragraph at all is what context_independent() decides, per piece, in
+ * segment_key().
+ *
+ * Returns how many pieces it could not store. Zero means the item can be put
+ * back together out of the cache; anything else means it cannot, and the caller
+ * keeps the item whole as well.
  */
-static void
+static guint
 insert_segments (const SegmentPlan        *plan,
                  const NsPangoGlyphString *glyphs,
-                 gboolean                  backwards)
+                 gboolean                  backwards,
+                 const CutSafety          *cuts)
 {
   int first[NS_PANGO_SHAPE_MAX_SEGMENTS];
   int count[NS_PANGO_SHAPE_MAX_SEGMENTS];
   guint n = plan->n;
+  guint refused = 0;
   int seen = 0;
 
   for (guint i = 0; i < n; i++)
@@ -900,26 +1008,26 @@ insert_segments (const SegmentPlan        *plan,
       guint seg;
 
       if (cluster < 0 || cluster >= plan->item_length)
-        return;
+        return n;
 
       for (seg = n; seg > 0; seg--)
         if ((guint32) cluster >= plan->starts[seg - 1])
           break;
       if (seg == 0)
-        return;
+        return n;
       seg--;
 
       if (count[seg] == 0)
         first[seg] = g;
       else if (first[seg] + count[seg] != g)
-        return;
+        return n;
       count[seg]++;
     }
 
   for (guint i = 0; i < n; i++)
     seen += count[i];
   if (seen != glyphs->num_glyphs)
-    return;
+    return n;
 
   for (guint i = 1; i < n; i++)
     {
@@ -927,17 +1035,103 @@ insert_segments (const SegmentPlan        *plan,
       guint b = backwards ? n - i - 1 : i;
 
       if (count[a] > 0 && count[b] > 0 && first[a] > first[b])
-        return;
+        return n;
     }
 
   for (guint i = 0; i < n; i++)
     {
       NsPangoShapeKey key;
 
-      if (count[i] > 0 && segment_key (plan, i, &key))
-        ns_pango_shape_cache_insert_range (&key, glyphs,
-                                           first[i], count[i], (int) plan->starts[i]);
+      if (count[i] == 0)
+        continue;
+
+      if ((i > 0 && cuts->unsafe[i]) ||
+          (i + 1 < n && cuts->unsafe[i + 1]) ||
+          !segment_key (plan, i, &key))
+        {
+          refused++;
+          continue;
+        }
+
+      ns_pango_shape_cache_insert_range (&key, glyphs,
+                                         first[i], count[i], (int) plan->starts[i]);
     }
+
+  return refused;
+}
+
+/* The key for the item taken whole, which is what is stored when the item's
+ * pieces do not add up to the item -- because the shaper would not let it be
+ * cut there, or because a piece cannot be lifted out of this paragraph. Only
+ * reached with no transform and no hyphen, which is the condition
+ * shape_by_segment() is called under.
+ */
+static gboolean
+whole_item_key (const SegmentPlan *plan,
+                NsPangoShapeKey   *key)
+{
+  return ns_pango_shape_cache_key_init (key, plan->analysis,
+                                        plan->item_text, plan->item_length,
+                                        plan->paragraph_text, plan->paragraph_length,
+                                        plan->flags, plan->show_flags,
+                                        NS_PANGO_TEXT_TRANSFORM_NONE,
+                                        NS_PANGO_SHAPE_HYPHEN_NONE,
+                                        plan->features, plan->num_features);
+}
+
+/* Pieces first, because they survive the line breaker cutting the item
+ * somewhere else; the item whole as a fallback, because a font that lets
+ * nothing be cut still repeats whole paragraphs -- measured, then measured
+ * again at another width, then painted.
+ */
+static gboolean
+serve_from_cache (const SegmentPlan  *plan,
+                  gboolean            backwards,
+                  NsPangoGlyphString *glyphs)
+{
+  NsPangoShapeKey key;
+  guint i;
+  int at = 0;
+
+  for (i = 0; i < plan->n; i++)
+    {
+      guint seg = backwards ? plan->n - 1 - i : i;
+      int before = at;
+
+      if (!segment_key (plan, seg, &key))
+        break;
+      if (!ns_pango_shape_cache_lookup_at (&key, glyphs, at, (int) plan->starts[seg]))
+        break;
+
+      at = glyphs->num_glyphs;
+      if (at == before)
+        break;
+    }
+
+  if (i == plan->n)
+    return TRUE;
+
+  return whole_item_key (plan, &key) &&
+         ns_pango_shape_cache_lookup (&key, glyphs);
+}
+
+static void
+store_in_cache (const SegmentPlan        *plan,
+                const NsPangoGlyphString *glyphs,
+                gboolean                  backwards,
+                const CutSafety          *cuts)
+{
+  NsPangoShapeKey key;
+
+  /* Every piece stored means the item can be assembled from them, whatever the
+   * line breaker later cuts it down to, and the item whole would only be a
+   * second copy of the same glyphs.
+   */
+  if (insert_segments (plan, glyphs, backwards, cuts) == 0)
+    return;
+
+  if (whole_item_key (plan, &key))
+    ns_pango_shape_cache_insert (&key, glyphs);
 }
 
 static gboolean
@@ -957,8 +1151,7 @@ shape_by_segment (const char            *item_text,
   guint32 starts[NS_PANGO_SHAPE_MAX_SEGMENTS];
   gboolean backwards = item_runs_backwards (analysis);
   SegmentPlan plan;
-  guint i;
-  int at = 0;
+  CutSafety cuts;
 
   plan.item_text = item_text;
   plan.item_length = item_length;
@@ -976,33 +1169,45 @@ shape_by_segment (const char            *item_text,
   if (plan.n < 2)
     return FALSE;
 
-  if (ns_pango_shape_cache_verifying ())
-    i = 0;
-  else
-    for (i = 0; i < plan.n; i++)
-      {
-        guint seg = backwards ? plan.n - 1 - i : i;
-        NsPangoShapeKey key;
-        int before = at;
+  cuts.starts = starts;
+  cuts.n = plan.n;
+  memset (cuts.unsafe, 0, plan.n * sizeof cuts.unsafe[0]);
 
-        if (!segment_key (&plan, seg, &key))
-          break;
-        if (!ns_pango_shape_cache_lookup_at (&key, glyphs, at, (int) starts[seg]))
-          break;
+  /* Verifying serves the item and then shapes it anyway, so that what the cache
+   * handed back can be compared against what the shaper says now. The way this
+   * cache can be wrong only shows up across paragraphs -- a piece stored beside
+   * one word and served beside another -- so comparing a fresh shaping against
+   * the entry it was just served from is the whole of the check.
+   */
+  if (G_UNLIKELY (ns_pango_shape_cache_verifying ()))
+    {
+      NsPangoGlyphString *served = ns_pango_glyph_string_new ();
+      gboolean was_served = serve_from_cache (&plan, backwards, served);
 
-        at = glyphs->num_glyphs;
-        if (at == before)
-          break;
-      }
+      shape_internal_uncached (item_text, item_length,
+                               paragraph_text, paragraph_length,
+                               analysis, log_attrs, num_chars, glyphs, flags,
+                               &cuts);
 
-  if (i == plan.n)
+      if (was_served && !glyph_strings_agree (served, glyphs))
+        g_warning ("shape cache mismatch on '%.*s'", item_length, item_text);
+
+      ns_pango_glyph_string_free (served);
+
+      store_in_cache (&plan, glyphs, backwards, &cuts);
+
+      return TRUE;
+    }
+
+  if (serve_from_cache (&plan, backwards, glyphs))
     return TRUE;
 
   shape_internal_uncached (item_text, item_length,
                            paragraph_text, paragraph_length,
-                           analysis, log_attrs, num_chars, glyphs, flags);
+                           analysis, log_attrs, num_chars, glyphs, flags,
+                           &cuts);
 
-  insert_segments (&plan, glyphs, backwards);
+  store_in_cache (&plan, glyphs, backwards, &cuts);
 
   return TRUE;
 }
@@ -1037,11 +1242,12 @@ ns_pango_shape_internal (const char          *item_text,
   if (paragraph_length == -1)
     paragraph_length = strlen (paragraph_text);
 
-  if (!ns_pango_shape_cache_enabled () || analysis->font == NULL)
+  if (!ns_pango_caches_enabled () || analysis->font == NULL)
     {
       shape_internal_uncached (item_text, item_length,
                                paragraph_text, paragraph_length,
-                               analysis, log_attrs, num_chars, glyphs, flags);
+                               analysis, log_attrs, num_chars, glyphs, flags,
+                               NULL);
       return;
     }
 
@@ -1078,7 +1284,8 @@ ns_pango_shape_internal (const char          *item_text,
 
   shape_internal_uncached (item_text, item_length,
                            paragraph_text, paragraph_length,
-                           analysis, log_attrs, num_chars, glyphs, flags);
+                           analysis, log_attrs, num_chars, glyphs, flags,
+                           NULL);
 
   if (!cacheable)
     return;

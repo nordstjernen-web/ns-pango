@@ -75,7 +75,10 @@ typedef enum
 
 #define NS_PANGO_SHAPE_HYPHEN_KIND(h) ((h) & 3)
 
-gboolean          ns_pango_shape_cache_enabled   (void);
+/* Whether the shape, break and item caches are on at all: one environment
+ * variable turns all three off together.
+ */
+gboolean          ns_pango_caches_enabled   (void);
 
 gboolean          ns_pango_shape_cache_verifying (void);
 

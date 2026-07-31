@@ -35,6 +35,8 @@ void     ns_pango_break_cache_store (const char         *text,
                                      int                 length,
                                      const NsPangoLogAttr *attrs);
 
+void     ns_pango_break_cache_trim  (void);
+
 void     ns_pango_break_cache_clear (void);
 
 G_END_DECLS

@@ -166,7 +166,7 @@ probe_init (BreakKey   *key,
             const char *text,
             int         length)
 {
-  if (!ns_pango_shape_cache_enabled () ||
+  if (!ns_pango_caches_enabled () ||
       text == NULL ||
       length <= 0 ||
       length > NS_BREAK_CACHE_MAX_TEXT ||
@@ -309,6 +309,18 @@ ns_pango_break_cache_store (const char           *text,
   g_hash_table_replace (shard->table, &entry->key, entry);
 
   g_rw_lock_writer_unlock (&shard->lock);
+}
+
+void
+ns_pango_break_cache_trim (void)
+{
+  for (guint i = 0; i < NS_BREAK_CACHE_SHARDS; i++)
+    {
+      g_rw_lock_writer_lock (&shards[i].lock);
+      if (shards[i].table != NULL)
+        drop_unread_entries (&shards[i]);
+      g_rw_lock_writer_unlock (&shards[i].lock);
+    }
 }
 
 void

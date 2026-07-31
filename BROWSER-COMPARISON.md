@@ -10,7 +10,7 @@ Everything about this fork was read at `8c2a96d`, built here with meson against
 glib 2.80.0, HarfBuzz 8.3.0, cairo 1.18.0, fontconfig 2.15.0, FreeType 2.13 and
 fribidi 1.0.13, and measured with `tests/ns-text-check` plus two probes written
 for this review (appendix). All of the harness passes here — `dump` three ways,
-`threads`, `spacing`, `synthesis`. Blink and Gecko were read at their current
+`reuse`, `threads`, `spacing`, `synthesis`. Blink and Gecko were read at their current
 `main`/`master`; file names are given so the claims can be checked.
 
 The fork's own delta is small enough to read in full: **+643/-196 lines across 19
@@ -21,24 +21,26 @@ what this review is mostly about; the other 60 000 lines are upstream Pango.
 
 The caching work is sound in outline and, on the evidence here, worth what it
 claims — roughly **1.9x on layout and 1.9x on intrinsic sizing** in a
-single-threaded run of the fork's own benchmark. The three caches map exactly
+single-threaded run of the fork's own benchmark, and unchanged by the correctness
+fix below. The three caches map exactly
 onto the three passes a browser repeats, which is the right decomposition, and
 the locking is more careful than Pango has ever been.
 
-Two things need attention. First, **the word-level shape cache has a correctness
-bug that reproduces on Liberation Sans and Liberation Serif** — what `Arial`,
-`Helvetica` and `Times New Roman` resolve to on a stock Linux font set — because
-it assumes shaping never crosses a space. Firefox has an explicit guard for
-exactly this case; Blink avoids it by construction. Second,
-**`NS_PANGO_SHAPE_CACHE=verify`
-stopped covering the path that carries the risk** when caching went
-word-at-a-time, so neither the verifier nor CI could have caught the first
-problem.
+Two things needed attention, and **both are fixed in this branch** — see *What
+this branch changed* below. First, **the word-level shape cache had a
+correctness bug that reproduced on Liberation Sans and Liberation Serif** — what
+`Arial`, `Helvetica` and `Times New Roman` resolve to on a stock Linux font set
+— because it assumed shaping never crosses a space. Firefox has an explicit
+guard for exactly this case; Blink avoids it by construction. Second,
+**`NS_PANGO_SHAPE_CACHE=verify` had stopped covering the path that carries the
+risk** when caching went word-at-a-time, so neither the verifier nor CI could
+have caught the first problem.
 
 Below that, the structural gap is architectural rather than a bug: both browsers
 shape a paragraph **once** and slice the shaped result per line using HarfBuzz's
 own safe-to-break flags. This fork reshapes each line, which is why it needs a
-word cache at all.
+word cache at all. That one is left alone; it is a rewrite of the line breaker,
+not a fix.
 
 ## The three stacks side by side
 
@@ -57,9 +59,9 @@ word cache at all.
 
 | | keyed on | unit | bound | eviction | invalidation | threads |
 | --- | --- | --- | --- | --- | --- | --- |
-| ns-pango shape | font ptr, language, level, gravity, script, 4 flag words, hyphen, ≤8 features, text | a word | 20 000 entries / 48 MB, 16 shards | 2-generation sweep, then wholesale | fontmap serial change drops all | `GRWLock` per shard |
+| ns-pango shape | font ptr, language, level, gravity, script, 4 flag words, hyphen, ≤8 features, text | a word, or the item whole where the shaper allows no cut | 20 000 entries / 48 MB, 16 shards | 2-generation sweep, then wholesale | fontmap serial change drops all | `GRWLock` per shard |
 | ns-pango break | text (≤64 KB), NUL-free | a paragraph | 8 000 entries / 16 MB, 16 shards | same | never (pure function of text) | `GRWLock` per shard |
-| ns-pango item | context ptr + serial, base dir, text (≤64 KB), full attr list | a paragraph | **4 000 entries, no byte bound** | same, entries only | serial change makes entries unreachable | `GRWLock` per shard |
+| ns-pango item | context ptr + serial, base dir, text (≤64 KB), full attr list | a paragraph | 4 000 entries / 16 MB, 16 shards | same | dropped on a fontmap change | `GRWLock` per shard |
 | ns-pango metrics | font description + language | one metrics struct | 512 per context | same | cleared on `context_changed` | per context, unlocked |
 | Blink `NGShapeCache` | text, start/end offset, locale, features, direction | an inline item | **2048 entries, ≤30 chars** | weak refs (dies with the `ShapeResult`), or `OnReleaseMemory()` | lives in the font; dies with it | main thread / per-thread fonts |
 | Gecko word cache | text, length, flags, script, language, app-units, rounding | a word or a space | 10 000 entries per font (`wordcache.maxentries`), ≤32 chars (`wordcache.charlimit`) | age 3 on a 60 s timer; wholesale flush on overflow | lives in the `gfxFont`; font itself expires | `RWLock` per font |
@@ -74,30 +76,30 @@ byte budget forces a sweep. The item cache does the same to `NsPangoContext`s
 (`ns-item-cache.c:317`), and each pinned context can itself be holding 512
 cached metrics.
 
-Three smaller observations on bounds:
+Three smaller observations on bounds, the first two of which this branch acted
+on:
 
-- The item cache is bounded by **entry count only**. Its ceiling is therefore
-  4 000 × 64 KB = **256 MB of paragraph text**, plus one item list, one context
-  reference and one font reference per entry. Measured here on 100 distinct
-  60 KB paragraphs, laid out twice each: RSS grew 42.0 MB with the caches on
-  against 7.3 MB with them off, and of the three only the item cache had not
-  reached a ceiling — the break cache had already swept itself down to 36 entries
-  against its byte budget. The item cache is the one that cannot say no.
-- The shape cache's per-entry overhead is dominated by a fixed
+- The item cache **was bounded by entry count only**, which is not a bound on
+  anything when an entry holds a 64 KB paragraph: the ceiling was 4 000 × 64 KB
+  of text, plus an item list, a context reference and a font reference each.
+  Measured before the change, on 100 distinct 60 KB paragraphs laid out twice
+  each, RSS grew 42.0 MB with the caches on against 7.3 MB with them off. It now
+  carries a 16 MB budget like the other two, and settles at 148 entries on a
+  workload of 400 such paragraphs where it used to hold every one of them.
+- Nothing reclaimed it, either: neither `ns_pango_cache_clear()` nor
+  `ns_pango_shape_cache_font_map_changed()` reached the item cache, and
+  `ns_pango_item_cache_clear()` had no caller in the tree, so after a web font
+  arrived its entries were unreachable but retained. Both now drop it, and
+  `ns_pango_cache_trim()` is the gentler option — the counterpart to Blink's
+  `OnReleaseMemory()` and Gecko's ageing timer, both of which this fork had no
+  answer to at all.
+- The shape cache's per-entry overhead is still dominated by a fixed
   `hb_feature_t features[8]` in the key: `sizeof (NsPangoShapeKey)` is **200
   bytes**, 128 of it that array, and it is paid **per cached word**. A
   three-glyph word costs 60 bytes of glyphs and 200 bytes of key. Storing
   features out of line when non-empty would take about a third off the cache at
-  no cost to the common path, since almost no run has features at all.
-- Neither `ns_pango_cache_clear()` nor `ns_pango_shape_cache_font_map_changed()`
-  touches the item cache (`ns-shape-cache.c:762-773`), and
-  `ns_pango_item_cache_clear()` has no caller anywhere in the tree. After a web
-  font arrives, item entries keyed on the old serial are unreachable but
-  retained, and the browser has no way to reclaim them. Both browsers have an
-  explicit path for this: Blink's `NGShapeCache` registers as a
-  `base::MemoryConsumer` and clears on `OnReleaseMemory()`, and Gecko ages its
-  word caches on a 60-second timer whether or not anything is under pressure.
-  This fork has no memory-pressure entry point at all.
+  no cost to the common path, since almost no run has features at all. Left
+  open.
 
 In fairness, the eviction policy here is **gentler** than Gecko's. A
 two-generation sweep that drops what nothing has read is strictly better than
@@ -106,13 +108,15 @@ passes 10 000 entries (`gfxFont.cpp:3331`). The fork's wholesale fallback only
 fires when a sweep failed to free half the budget, which is the case where the
 working set really is the whole cache.
 
-## The shape cache assumes shaping never crosses a space. It does.
+## The shape cache assumed shaping never crosses a space. It does.
 
-`segment_starts_here()` (`ns-shape-cache.c:236`) cuts an item before any
-character whose left neighbour is a space, and `context_independent()`
-(`ns-shape-cache.c:284`) admits an item whose edges sit next to a space or an
-isolated ideograph. The stated rule is that a boundary is independent when the
-characters either side of it "neither join nor ligate".
+This is the finding the branch is built around; it is written in the present
+tense as it was found, and what replaced it is under *What this branch changed*.
+
+`segment_starts_here()` cut an item before any character whose left neighbour is
+a space, and `context_independent()` admits an item whose edges sit next to a
+space or an isolated ideograph. The stated rule is that a boundary is
+independent when the characters either side of it "neither join nor ligate".
 
 Joining and ligating are not the only things that cross a boundary. **Kerning
 does**, and in the common Latin fonts it kerns *the space itself*:
@@ -191,18 +195,20 @@ exists for exactly this use: its documentation describes splicing separately
 shaped segments and says two pieces may be concatenated only if both are clear of
 the flag at the join. Reading that flag off the whole-item shaping in
 `insert_segments()` and refusing to store a piece whose first or last cluster
-carries it would fix this class of bug at its root, for kerning, for contextual
+carries it fixes this class of bug at its root, for kerning, for contextual
 alternates, for the CJK contextual spacing the fork already found by hand, and
 for whatever the next font does — without a per-font table scan, and without
-giving up the wins the cache actually delivers. That is the recommendation.
+giving up the wins the cache actually delivers. **That is what this branch now
+does**; the measurements are under *What this branch changed*.
 
-The same reasoning applies, less urgently, to the whole-item rule: an item
-boundary that falls between two ideographs is still admitted by
-`context_independent()`, even though commit "Never cut an item between two
-ideographs" established that Noto Sans CJK adjusts an ideograph's advance against
-its neighbour. Item boundaries between two ideographs are rare — they need a font
-or attribute change mid-run — but the rule that rejected the cut should reject
-the edge.
+The same reasoning applies, less urgently, to the whole-item rule, and it is not
+addressed by the fix: an item boundary that falls between two ideographs is still
+admitted by `context_independent()`, even though commit "Never cut an item
+between two ideographs" established that Noto Sans CJK adjusts an ideograph's
+advance against its neighbour. The shaper cannot help here — what lies beyond an
+item's edge is not in the buffer it was asked about. Item boundaries between two
+ideographs are rare, needing a font or attribute change mid-run, but the rule
+that rejected the cut should eventually reject the edge.
 
 ## Verify mode no longer covers the path that needs verifying
 
@@ -406,45 +412,92 @@ inheriting whatever the embedder happens to set.
 
 ## Findings
 
-| # | where | what | severity |
+| # | what | severity | status |
 | --- | --- | --- | --- |
-| 1 | `ns-shape-cache.c:236`, `:284` | Word slicing assumes no shaping crosses a space; kerning does. Reproduces on Liberation Sans/Serif — a cached piece carries the advance it had next to a different word. Wrong widths, order-dependent | high |
-| 2 | `shape.c:979` | `verify` mode skips the segmented path, so the strongest safety net does not cover the riskiest code; the CI's `uncached` vs `verified` diff is vacuous | high |
-| 3 | `ns-item-cache.c:49`, `:283` | Item cache bounded by entry count only: ceiling is 4 000 × 64 KB of text plus items, contexts and fonts | medium |
-| 4 | `ns-shape-cache.c:762` | `ns_pango_cache_clear()` does not clear the item cache; `ns_pango_item_cache_clear()` has no caller; stale entries survive a fontmap change | medium |
-| 5 | library-wide | No memory-pressure or trim entry point. Blink clears `NGShapeCache` on `OnReleaseMemory()`; Gecko ages word caches on a timer | medium |
-| 6 | `ns-shape-cache.h:39` | 200-byte key per cached word, 128 bytes of it a features array almost always empty | low |
-| 7 | `ns-shape-cache.c:482`, `ns-item-cache.c:317` | Cache entries pin fonts and contexts alive, inverting the ownership both browsers use | low |
-| 8 | `ns-shape-cache.c:798` | `ns_pango_cache_get_stats()` writes to stderr as a side effect under `NS_PANGO_CACHE_DEBUG`, against this project's own naming rule that a `get` is side-effect free | low |
-| 9 | `ns-break-cache.c:169`, `ns-item-cache.c:177` | `NS_PANGO_SHAPE_CACHE=0` silently disables the break and item caches too; the name and the README say shape | low |
-| 10 | `ns-shape-cache.c:781` | Statistics counters are `gint`, wrap silently, and are widened to `guint64` at the API boundary | cosmetic |
+| 1 | Word slicing assumed no shaping crosses a space; kerning does. Reproduced on Liberation Sans/Serif — a cached piece carried the advance it had next to a different word. Wrong widths, order-dependent | high | fixed |
+| 2 | `verify` mode skipped the segmented path, so the strongest safety net did not cover the riskiest code; the CI's `uncached` vs `verified` diff was vacuous | high | fixed |
+| 3 | Item cache bounded by entry count only: ceiling was 4 000 × 64 KB of text plus items, contexts and fonts | medium | fixed |
+| 4 | `ns_pango_cache_clear()` did not clear the item cache; `ns_pango_item_cache_clear()` had no caller; stale entries survived a fontmap change | medium | fixed |
+| 5 | No memory-pressure or trim entry point. Blink clears `NGShapeCache` on `OnReleaseMemory()`; Gecko ages word caches on a timer | medium | fixed |
+| 6 | 200-byte key per cached word, 128 bytes of it a features array almost always empty | low | open |
+| 7 | Cache entries pin fonts and contexts alive, inverting the ownership both browsers use | low | open |
+| 8 | `ns_pango_cache_get_stats()` wrote to stderr as a side effect under `NS_PANGO_CACHE_DEBUG`, against this project's own rule that a `get` is side-effect free | low | fixed |
+| 9 | `NS_PANGO_SHAPE_CACHE=0` silently disabled the break and item caches too, though the name says shape | low | fixed |
+| 10 | Statistics counters are `gint`, wrap silently, and are widened to `guint64` at the API boundary | cosmetic | open |
 
 Nothing found is a memory-safety defect. The new code is defensive in the places
 that matter, and ThreadSanitizer's outstanding reports are, as documented, inside
 fontconfig rather than here.
 
+## What this branch changed
+
+**The cut rule now asks the font.** `ns_pango_hb_shape()` sets
+`HB_BUFFER_FLAG_PRODUCE_UNSAFE_TO_CONCAT` whenever the result is going to be cut
+up, collects the flag per candidate cut, and `insert_segments()` stores a piece
+only when the shaper cleared both of the cuts that made it. The existing Unicode
+rule still governs the item's own two ends, where the shaper has no opinion
+because what lies beyond them is a different item.
+
+The flag is conservative — it is computed from lookup coverage, so a font with
+class-based kerning flags cuts whose advances would not actually have moved. On
+the corpus that costs about a tenth of the cache's hits, 34 326 down to 31 337.
+It costs no measurable time, because an item whose pieces do not all survive the
+rule is now stored **whole** instead — which is what the cache did before it
+learned to slice, and which still serves the pattern a browser repeats most:
+the same paragraph measured, measured again, and painted. Three interleaved runs
+of `bench`, in milliseconds of layout: 566/685/577 before the change, 550/600/557
+after, and 961/1133/1084 with no cache at all.
+
+**`verify` serves before it shapes.** It now runs the full serving path into a
+scratch glyph string, shapes the item again, and compares the two field by field.
+Before, it skipped the lookups and compared nothing for any item with more than
+one word.
+
+**A test for the property that actually broke.** `ns-text-check reuse` lays each
+of two dozen word-sharing paragraphs out on its own, then again behind all the
+others, and requires the same geometry both times — order-independence, which is
+stronger than "the cache does not change the glyphs" and is what the bug
+violated. It runs in `Arial`, `Helvetica` and `Times New Roman` as well as the
+generic families, and CI now installs `fonts-liberation` so those names resolve
+to fonts that kern the space. On the pre-fix build it reports 18 mismatches; on
+this one, none.
+
+**Bounds and reclamation.** The item cache has a 16 MB budget alongside its entry
+count, and is swept the same way the other two are: on 400 distinct 60 KB
+paragraphs it now settles at 148 entries where it would have held 402.
+`ns_pango_cache_clear()` reaches it, a fontmap change drops it, and a new
+`ns_pango_cache_trim()` gives back what nothing has read since the last sweep
+across all three caches while keeping the working set — the gentler half of what
+Blink's `OnReleaseMemory()` and Gecko's ageing timer do.
+
+**Smaller things.** `ns_pango_cache_get_stats()` no longer prints; the skip
+reasons moved to `ns_pango_cache_get_skips()` and the harness prints them. The
+predicate behind `NS_PANGO_SHAPE_CACHE` is now called `ns_pango_caches_enabled()`,
+since one variable governs all three.
+
+Left open deliberately: the 128-byte feature array in the shape key (a memory
+win, no correctness content), the cache-owns-font direction (a structural change
+with no bug behind it), and the counters' width. And the big one — shaping a
+paragraph once and slicing it per line, the way `ShapeResultView` does — which is
+a different project.
+
 ## Recommendations, in order
 
-1. **Admit pieces on HarfBuzz's evidence, not on a Unicode heuristic.** Read
-   `HB_GLYPH_FLAG_UNSAFE_TO_CONCAT` from the whole-item shaping and refuse to
-   store any piece whose first or last cluster carries it. This is a small change
-   in `insert_segments()`, it costs nothing at lookup time, and it retires the
-   entire class of bug — kerning, contextual alternates, CJK spacing — instead of
-   the members of it someone has thought of. Keep the existing rule as a cheap
-   pre-filter if it helps.
-2. **Make `verify` verify the segmented path**: look up each piece, compare
-   against the fresh shaping, warn and discard on a mismatch. Then add a
-   space-kerning font to the CI image and an order-shuffled mode to the corpus.
-3. **Give the item cache a byte budget** and wire `ns_pango_item_cache_clear()`
-   into `ns_pango_cache_clear()`.
-4. **Add a trim entry point** — `ns_pango_cache_trim(level)` — so the browser can
-   hand memory back under pressure, as both browsers do.
+1. ~~**Admit pieces on HarfBuzz's evidence, not on a Unicode heuristic.**~~ Done:
+   `HB_GLYPH_FLAG_UNSAFE_TO_CONCAT` now decides where an item may be cut, with the
+   whole item stored when nothing may be.
+2. ~~**Make `verify` verify the segmented path.**~~ Done, along with the `reuse`
+   test and `fonts-liberation` in CI.
+3. ~~**Give the item cache a byte budget**, and wire `ns_pango_item_cache_clear()`
+   into `ns_pango_cache_clear()`.~~ Done.
+4. ~~**Add a trim entry point.**~~ Done: `ns_pango_cache_trim()`.
 5. **Store shape-key features out of line.** Takes about a third off the cache's
-   memory in the overwhelmingly common case of no features at all.
+   memory in the overwhelmingly common case of no features at all. Still open.
 6. Then, and only as a separate project, consider shaping a paragraph once and
    slicing it per line at safe-to-break offsets, the way Blink's
    `ShapeResultView` does. That is where the remaining factor lives, and it would
-   make the word cache incidental rather than load-bearing.
+   make the word cache incidental rather than load-bearing. Still open, and the
+   one worth planning.
 
 The locking work already done is the prerequisite for none of these; the
 fontconfig fontmap remains the prerequisite for parallel layout, and that

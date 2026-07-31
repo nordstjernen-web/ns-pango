@@ -16,13 +16,21 @@ keeps the finished glyph string in a process-wide hash keyed on everything
 `hb_shape` reads, and only for runs whose shaping cannot depend on the text
 around them — which includes runs ending at a hyphenated break, and CJK,
 where there is no whitespace to key off but ideographs, kana and Hangul
-syllables neither join nor ligate. A full cache drops the entries nothing
-has read since the last sweep rather than clearing outright.
+syllables neither join nor ligate. An item is cached a word at a time, and
+**where it may be cut is the shaper's answer, not Unicode's**: a cut is only
+taken where HarfBuzz clears the cluster of `UNSAFE_TO_CONCAT`, because a font
+may kern the space against the word after it — Liberation Sans, which
+fontconfig hands out for Arial, does — and a piece cut there would carry a
+width belonging to whatever paragraph happened to be shaped first. An item
+nothing may be cut in is cached whole instead. A full cache drops the entries
+nothing has read since the last sweep rather than clearing outright.
 `pango_context_get_metrics` is likewise cached per font description rather
 than only for the context's own, bounded, and dropped when the fontmap
-changes. Set `NS_PANGO_SHAPE_CACHE=0` to disable the cache, or `=verify` to
-shape both ways and warn on any difference; `NS_PANGO_CACHE_DEBUG=1`
-reports why runs were not cached.
+changes. `ns_pango_cache_trim` gives back everything nothing has read since
+the last sweep, and `ns_pango_cache_clear` gives back the lot. Set
+`NS_PANGO_SHAPE_CACHE=0` to disable all three caches, or `=verify` to serve
+each run from the cache, shape it again, and warn on any difference;
+`ns_pango_cache_get_skips` reports why runs were not cached.
 
 **Every symbol is renamed** — `ns_pango_*`, `NsPango*`, `NS_PANGO_*`,
 `NS_TYPE_PANGO_*`, and headers under `ns-pango/`. GTK loads the system
@@ -65,12 +73,14 @@ core text layer with the cairo and fontconfig/FreeType backends.
 What replaces the test suite is `tests/ns-text-check`, built with
 `-Dbuild-testsuite=true`. `dump` prints every glyph of every run of every
 line for a corpus of scripts and wrapping modes, so CI can diff shaping
-with the cache serving, off and verifying; `threads` checks that threads
-sharing the cache agree with a thread on its own; `spacing` checks
-word-spacing against CSS; `synthesis` checks that every family's advances
-agree between HarfBuzz, which measures, and cairo, which draws; and
-`bench` times laying a paragraph out and measuring it the way intrinsic
-sizing does.
+with the cache serving, off and verifying; `reuse` lays a paragraph out on
+its own and again behind two dozen others that share words with it, and
+requires the same geometry both times, which is what a cache that keys on
+the wrong thing breaks; `threads` checks that threads sharing the cache agree
+with a thread on its own; `spacing` checks word-spacing against CSS;
+`synthesis` checks that every family's advances agree between HarfBuzz, which
+measures, and cairo, which draws; and `bench` times laying a paragraph out and
+measuring it the way intrinsic sizing does.
 
 `BROWSER-COMPARISON.md` sets all of this against the equivalent code in Firefox
 and Chrome — what each caches and how it bounds it, where the performance comes

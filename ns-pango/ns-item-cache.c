@@ -46,8 +46,15 @@
  * rewrites them.
  */
 
+/* A count of entries is not a bound on anything: an entry holds a paragraph,
+ * and a paragraph here can be 64 KB, so four thousand of them is a quarter of a
+ * gigabyte of text before counting the items, the attributes, or the fonts and
+ * contexts an entry keeps alive. A page is free to be made of large distinct
+ * paragraphs, so the bound that matters is the one in bytes.
+ */
 #define NS_ITEM_CACHE_MAX_ENTRIES 4000
 #define NS_ITEM_CACHE_MAX_TEXT    (64 * 1024)
+#define NS_ITEM_CACHE_MAX_BYTES   (16 * 1024 * 1024)
 #define NS_ITEM_CACHE_SHARDS      16
 #define NS_ITEM_CACHE_SHARD(hash) (((hash) >> 27) & (NS_ITEM_CACHE_SHARDS - 1))
 
@@ -67,13 +74,29 @@ typedef struct
 {
   ItemKey  key;
   GList   *items;              /* offsets relative to the slice, not the text */
+  gsize    bytes;              /* what this entry costs, against the shard's budget */
   char     owned_text[1];
 } ItemEntry;
+
+/* What an item costs beyond the struct itself: a list link, a reference on a
+ * font, and whatever attributes came with it. Attributes are shared and refcounted
+ * and their sizes vary, so this is an estimate rather than a measurement -- it
+ * only has to be steady enough to keep the budget from drifting.
+ */
+#define ITEM_OVERHEAD_ESTIMATE (sizeof (NsPangoItem) + 2 * sizeof (GList) + 64)
+
+static gsize
+item_entry_size (const ItemEntry *entry)
+{
+  return sizeof (ItemEntry) + entry->key.length +
+         g_list_length (entry->items) * ITEM_OVERHEAD_ESTIMATE;
+}
 
 typedef struct
 {
   GRWLock     lock;
   GHashTable *table;
+  gsize       bytes;
 } ItemShard;
 
 static ItemShard shards[NS_ITEM_CACHE_SHARDS];
@@ -174,7 +197,7 @@ probe_init (ItemKey          *key,
   const char *slice = text + start_index;
   guint hash = 5381;
 
-  if (!ns_pango_shape_cache_enabled () ||
+  if (!ns_pango_caches_enabled () ||
       context == NULL || length <= 0 || length > NS_ITEM_CACHE_MAX_TEXT)
     return FALSE;
 
@@ -262,11 +285,17 @@ ns_pango_item_cache_lookup (NsPangoContext   *context,
   return items;
 }
 
+/* Both of these run with the shard held for writing. */
+
 static void
 drop_unread_entries (ItemShard *shard)
 {
   GHashTableIter iter;
   gpointer k, v;
+  gsize freed = 0;
+
+  if (shard->table == NULL)
+    return;
 
   g_hash_table_iter_init (&iter, shard->table);
   while (g_hash_table_iter_next (&iter, &k, &v))
@@ -276,20 +305,30 @@ drop_unread_entries (ItemShard *shard)
       if (entry->key.read)
         entry->key.read = FALSE;
       else
-        g_hash_table_iter_remove (&iter);
+        {
+          freed += entry->bytes;
+          g_hash_table_iter_remove (&iter);
+        }
     }
+
+  shard->bytes -= MIN (freed, shard->bytes);
 }
 
 static void
 make_room (ItemShard *shard)
 {
-  if (g_hash_table_size (shard->table) < NS_ITEM_CACHE_MAX_ENTRIES / NS_ITEM_CACHE_SHARDS)
+  if (g_hash_table_size (shard->table) < NS_ITEM_CACHE_MAX_ENTRIES / NS_ITEM_CACHE_SHARDS &&
+      shard->bytes < NS_ITEM_CACHE_MAX_BYTES / NS_ITEM_CACHE_SHARDS)
     return;
 
   drop_unread_entries (shard);
 
-  if (g_hash_table_size (shard->table) >= NS_ITEM_CACHE_MAX_ENTRIES / NS_ITEM_CACHE_SHARDS / 2)
-    g_hash_table_remove_all (shard->table);
+  if (g_hash_table_size (shard->table) >= NS_ITEM_CACHE_MAX_ENTRIES / NS_ITEM_CACHE_SHARDS / 2 ||
+      shard->bytes >= NS_ITEM_CACHE_MAX_BYTES / NS_ITEM_CACHE_SHARDS / 2)
+    {
+      g_hash_table_remove_all (shard->table);
+      shard->bytes = 0;
+    }
 }
 
 void
@@ -317,6 +356,7 @@ ns_pango_item_cache_insert (NsPangoContext   *context,
   g_object_ref (context);
   entry->items = copy_items (items, -start_index,
                              -(int) g_utf8_strlen (text, start_index));
+  entry->bytes = item_entry_size (entry);
 
   shard = &shards[NS_ITEM_CACHE_SHARD (probe.hash)];
 
@@ -328,9 +368,33 @@ ns_pango_item_cache_insert (NsPangoContext   *context,
   else
     make_room (shard);
 
+  {
+    const ItemEntry *old = g_hash_table_lookup (shard->table, &entry->key);
+
+    if (old != NULL)
+      shard->bytes -= MIN (old->bytes, shard->bytes);
+  }
+
+  shard->bytes += entry->bytes;
+
   g_hash_table_replace (shard->table, &entry->key, entry);
 
   g_rw_lock_writer_unlock (&shard->lock);
+}
+
+/* Drops what nothing has asked for since the last sweep, without touching the
+ * working set -- what a browser wants when it is asked to give memory back but
+ * is still displaying the page.
+ */
+void
+ns_pango_item_cache_trim (void)
+{
+  for (guint i = 0; i < NS_ITEM_CACHE_SHARDS; i++)
+    {
+      g_rw_lock_writer_lock (&shards[i].lock);
+      drop_unread_entries (&shards[i]);
+      g_rw_lock_writer_unlock (&shards[i].lock);
+    }
 }
 
 void
@@ -342,6 +406,7 @@ ns_pango_item_cache_clear (void)
 
       if (shards[i].table != NULL)
         g_hash_table_remove_all (shards[i].table);
+      shards[i].bytes = 0;
 
       g_rw_lock_writer_unlock (&shards[i].lock);
     }

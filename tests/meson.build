@@ -23,6 +23,9 @@ test('dump-verify', ns_text_check, args: [ 'dump' ], timeout: 240,
 # main thread, so threads sharing it must not see different glyphs.
 test('threads', ns_text_check, args: [ 'threads', '8' ], timeout: 240)
 
+# Nothing a paragraph is laid out behind may change how it comes out.
+test('reuse', ns_text_check, args: [ 'reuse' ], timeout: 120)
+
 # word-spacing has to put space exactly where CSS Text says it goes.
 test('spacing', ns_text_check, args: [ 'spacing' ], timeout: 60)
 
