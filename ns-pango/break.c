@@ -27,6 +27,8 @@
 #include "pango-attributes-private.h"
 #include "pango-break-table.h"
 #include "pango-impl-utils.h"
+#include "ns-break-cache.h"
+#include "ns-shape-cache.h"
 #include <string.h>
 
 /* In Unicode 17, there are some test cases which contain
@@ -2493,7 +2495,26 @@ ns_pango_default_break (const char    *text,
 {
   NsPangoLogAttr before = *attrs;
 
-  default_break (text, length, analysis, attrs, attrs_len);
+  /* The cache holds what default_break() alone produced, so it is consulted
+   * and filled either side of the merge below, which folds in what the
+   * previous paragraph left at this position and so is not a function of the
+   * text.
+   */
+  if (!ns_pango_break_cache_fill (text, length, attrs, attrs_len))
+    {
+      default_break (text, length, analysis, attrs, attrs_len);
+      ns_pango_break_cache_store (text, length, attrs);
+    }
+  else if (G_UNLIKELY (ns_pango_shape_cache_verifying ()))
+    {
+      int n = (int) g_utf8_strlen (text, length) + 1;
+      NsPangoLogAttr *fresh = g_new0 (NsPangoLogAttr, n);
+
+      default_break (text, length, analysis, fresh, n);
+      if (memcmp (fresh, attrs, n * sizeof (NsPangoLogAttr)) != 0)
+        g_warning ("break cache mismatch on '%.*s'", length, text);
+      g_free (fresh);
+    }
 
   attrs->is_line_break      |= before.is_line_break;
   attrs->is_mandatory_break |= before.is_mandatory_break;

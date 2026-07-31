@@ -28,7 +28,33 @@
 
 G_BEGIN_DECLS
 
-typedef struct _NsPangoShapeKey NsPangoShapeKey;
+/* The key is laid out here rather than hidden in the cache so that a lookup can
+ * build one on the stack. Shaping asks the cache far more often than it fills
+ * it, and a heap key per question cost a malloc, a free and a pair of atomic
+ * refcount updates on the font for every hit.
+ *
+ * @text points at the caller's item text in a key built to ask a question, and
+ * at @owned_text in the copy the table keeps.
+ */
+typedef struct
+{
+  guint        hash;
+  gpointer     font;
+  gpointer     language;
+  guint32      level;
+  guint32      gravity;
+  guint32      script;
+  guint32      analysis_flags;
+  guint32      shape_flags;
+  guint32      show_flags;
+  guint32      transform;
+  guint32      hyphen;
+  guint32      n_features;
+  guint32      text_length;
+  const char  *text;
+  hb_feature_t features[8];
+  char         owned_text[];
+} NsPangoShapeKey;
 
 /* What shaping will do to a hyphenated item: which hyphen it appends, if the
  * font has one, and whether it drops the character before the break. Both
@@ -53,7 +79,8 @@ gboolean          ns_pango_shape_cache_enabled   (void);
 
 gboolean          ns_pango_shape_cache_verifying (void);
 
-NsPangoShapeKey * ns_pango_shape_cache_key_new   (const NsPangoAnalysis *analysis,
+gboolean          ns_pango_shape_cache_key_init  (NsPangoShapeKey       *key,
+                                                  const NsPangoAnalysis *analysis,
                                                   const char            *item_text,
                                                   int                    item_length,
                                                   const char            *paragraph_text,
@@ -65,12 +92,10 @@ NsPangoShapeKey * ns_pango_shape_cache_key_new   (const NsPangoAnalysis *analysi
                                                   const hb_feature_t    *features,
                                                   guint                  n_features);
 
-void              ns_pango_shape_cache_key_free  (NsPangoShapeKey       *key);
-
 gboolean          ns_pango_shape_cache_lookup    (const NsPangoShapeKey *key,
                                                   NsPangoGlyphString    *glyphs);
 
-void              ns_pango_shape_cache_insert    (NsPangoShapeKey       *key,
+void              ns_pango_shape_cache_insert    (const NsPangoShapeKey    *key,
                                                   const NsPangoGlyphString *glyphs);
 
 void              ns_pango_shape_cache_font_map_changed (void);

@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include "ns-shape-cache.h"
+#include "ns-break-cache.h"
 #include "ns-pango-cache.h"
 #include "pango-impl-utils.h"
 
@@ -46,24 +47,20 @@
 #define NS_SHAPE_CACHE_MAX_TEXT    4096
 #define NS_SHAPE_CACHE_MAX_BYTES   (48 * 1024 * 1024)
 
-struct _NsPangoShapeKey
-{
-  guint      hash;
-  gpointer   font;
-  gpointer   language;
-  guint32    level;
-  guint32    gravity;
-  guint32    script;
-  guint32    analysis_flags;
-  guint32    shape_flags;
-  guint32    show_flags;
-  guint32    transform;
-  guint32    hyphen;
-  guint32    n_features;
-  guint32    text_length;
-  hb_feature_t features[8];
-  char       text[1];
-};
+/* One table behind one lock does not survive being shared. Every thread gets
+ * its own fontmap, because the fontconfig fontmap's caches are unlocked, so it
+ * gets its own NsPangoFont objects too -- and the key names the font, so
+ * nothing one thread shapes can be served to another. Threads therefore all
+ * miss, all take the lock exclusively to insert, and all serialise behind each
+ * other's memcpy: measured over the corpus on four cores, four threads with one
+ * table ran no faster than four threads with the cache switched off entirely.
+ *
+ * Splitting the table on the high bits of the hash, which the table's own
+ * bucket index does not use, gives each shard its own lock. Two threads
+ * inserting different runs now only collide one time in NS_SHAPE_CACHE_SHARDS.
+ */
+#define NS_SHAPE_CACHE_SHARDS      16
+#define NS_SHAPE_CACHE_SHARD(hash) (((hash) >> 27) & (NS_SHAPE_CACHE_SHARDS - 1))
 
 typedef struct
 {
@@ -73,16 +70,20 @@ typedef struct
   int              *log_clusters;
 } CachedRun;
 
-static GHashTable *shape_cache;
-
 /* Once the cache is warm almost every visit is a lookup, and a lookup only
  * reads the table -- so readers run concurrently and only the writers, which are
- * the inserts and the eviction sweeps, take the table exclusively. With one
+ * the inserts and the eviction sweeps, take a shard exclusively. With one
  * plain mutex the memcpy of every cached glyph string was serialised across all
  * the threads a browser shapes on.
  */
-static GRWLock shape_cache_lock;
-static gsize cache_bytes;
+typedef struct
+{
+  GRWLock     lock;
+  GHashTable *table;
+  gsize       bytes;
+} ShapeShard;
+
+static ShapeShard shards[NS_SHAPE_CACHE_SHARDS];
 
 /* Diagnostics only, so counters that may wrap are good enough. They are
  * atomic rather than plain because every thread that shapes writes them, and a
@@ -292,24 +293,24 @@ run_free (gpointer data)
   g_free (run);
 }
 
-NsPangoShapeKey *
-ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
-                              const char            *item_text,
-                              int                    item_length,
-                              const char            *paragraph_text,
-                              int                    paragraph_length,
-                              NsPangoShapeFlags      shape_flags,
-                              guint                  show_flags,
-                              guint                  transform,
-                              NsPangoShapeHyphen     hyphen,
-                              const hb_feature_t    *features,
-                              guint                  n_features)
+gboolean
+ns_pango_shape_cache_key_init (NsPangoShapeKey       *key,
+                               const NsPangoAnalysis *analysis,
+                               const char            *item_text,
+                               int                    item_length,
+                               const char            *paragraph_text,
+                               int                    paragraph_length,
+                               NsPangoShapeFlags      shape_flags,
+                               guint                  show_flags,
+                               guint                  transform,
+                               NsPangoShapeHyphen     hyphen,
+                               const hb_feature_t    *features,
+                               guint                  n_features)
 {
-  NsPangoShapeKey *key;
   guint hash;
 
   if (!ns_pango_shape_cache_enabled ())
-    return NULL;
+    return FALSE;
 
   if (analysis->font == NULL ||
       item_length <= 0 ||
@@ -325,7 +326,7 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
 
       g_atomic_int_inc (&cache_skips);
 
-      return NULL;
+      return FALSE;
     }
 
   /* Appending a hyphen clears the post-context HarfBuzz was given, so a
@@ -340,11 +341,10 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
     {
       g_atomic_int_inc (&skip_ctx);
       g_atomic_int_inc (&cache_skips);
-      return NULL;
+      return FALSE;
     }
 
-  key = g_malloc0 (sizeof (NsPangoShapeKey) + item_length);
-  key->font = g_object_ref (analysis->font);
+  key->font = analysis->font;
   key->language = analysis->language;
   key->level = analysis->level;
   key->gravity = analysis->gravity;
@@ -356,13 +356,13 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
   key->hyphen = hyphen;
   key->n_features = n_features;
   key->text_length = item_length;
+  key->text = item_text;
   if (n_features > 0)
     memcpy (key->features, features, n_features * sizeof (hb_feature_t));
-  memcpy (key->text, item_text, item_length);
 
   hash = 5381;
   for (int i = 0; i < item_length; i++)
-    hash = hash * 33 + (guchar) key->text[i];
+    hash = hash * 33 + (guchar) item_text[i];
   hash = hash * 33 + GPOINTER_TO_UINT (key->font);
   hash = hash * 33 + GPOINTER_TO_UINT (key->language);
   hash = hash * 33 + key->level;
@@ -377,13 +377,23 @@ ns_pango_shape_cache_key_new (const NsPangoAnalysis *analysis,
     hash = hash * 33 + (guint) key->features[i].tag + key->features[i].value;
   key->hash = hash;
 
-  return key;
+  return TRUE;
 }
 
-void
-ns_pango_shape_cache_key_free (NsPangoShapeKey *key)
+/* The table has to own both its key's text and a reference on the font the key
+ * names, neither of which a stack key carries.
+ */
+static NsPangoShapeKey *
+key_dup_owned (const NsPangoShapeKey *key)
 {
-  key_free (key);
+  NsPangoShapeKey *owned = g_malloc (sizeof (NsPangoShapeKey) + key->text_length);
+
+  *owned = *key;
+  memcpy (owned->owned_text, key->text, key->text_length);
+  owned->text = owned->owned_text;
+  owned->font = g_object_ref (key->font);
+
+  return owned;
 }
 
 static void
@@ -401,17 +411,15 @@ gboolean
 ns_pango_shape_cache_lookup (const NsPangoShapeKey *key,
                              NsPangoGlyphString    *glyphs)
 {
+  ShapeShard *shard = &shards[NS_SHAPE_CACHE_SHARD (key->hash)];
   CachedRun *run;
 
-  if (key == NULL)
-    return FALSE;
+  g_rw_lock_reader_lock (&shard->lock);
 
-  g_rw_lock_reader_lock (&shape_cache_lock);
-
-  run = shape_cache != NULL ? g_hash_table_lookup (shape_cache, key) : NULL;
+  run = shard->table != NULL ? g_hash_table_lookup (shard->table, key) : NULL;
   if (run == NULL)
     {
-      g_rw_lock_reader_unlock (&shape_cache_lock);
+      g_rw_lock_reader_unlock (&shard->lock);
       g_atomic_int_inc (&cache_misses);
       return FALSE;
     }
@@ -423,7 +431,7 @@ ns_pango_shape_cache_lookup (const NsPangoShapeKey *key,
   g_atomic_int_set (&run->read, TRUE);
   copy_run_to_glyphs (run, glyphs);
 
-  g_rw_lock_reader_unlock (&shape_cache_lock);
+  g_rw_lock_reader_unlock (&shard->lock);
 
   g_atomic_int_inc (&cache_hits);
 
@@ -434,27 +442,17 @@ gboolean
 ns_pango_shape_cache_matches (const NsPangoShapeKey    *key,
                               const NsPangoGlyphString *glyphs)
 {
+  ShapeShard *shard = &shards[NS_SHAPE_CACHE_SHARD (key->hash)];
   CachedRun *run;
+  gboolean same = TRUE;
 
-  if (key == NULL)
-    return TRUE;
+  g_rw_lock_reader_lock (&shard->lock);
 
-  g_rw_lock_reader_lock (&shape_cache_lock);
+  run = shard->table != NULL ? g_hash_table_lookup (shard->table, key) : NULL;
+  if (run != NULL && run->num_glyphs != glyphs->num_glyphs)
+    same = FALSE;
 
-  run = shape_cache != NULL ? g_hash_table_lookup (shape_cache, key) : NULL;
-  if (run == NULL)
-    {
-      g_rw_lock_reader_unlock (&shape_cache_lock);
-      return TRUE;
-    }
-
-  if (run->num_glyphs != glyphs->num_glyphs)
-    {
-      g_rw_lock_reader_unlock (&shape_cache_lock);
-      return FALSE;
-    }
-
-  for (int i = 0; i < run->num_glyphs; i++)
+  for (int i = 0; run != NULL && same && i < run->num_glyphs; i++)
     {
       const NsPangoGlyphInfo *a = &run->glyphs[i];
       const NsPangoGlyphInfo *b = &glyphs->glyphs[i];
@@ -466,27 +464,24 @@ ns_pango_shape_cache_matches (const NsPangoShapeKey    *key,
           a->attr.is_cluster_start != b->attr.is_cluster_start ||
           a->attr.is_color != b->attr.is_color ||
           run->log_clusters[i] != glyphs->log_clusters[i])
-        {
-          g_rw_lock_reader_unlock (&shape_cache_lock);
-          return FALSE;
-        }
+        same = FALSE;
     }
 
-  g_rw_lock_reader_unlock (&shape_cache_lock);
+  g_rw_lock_reader_unlock (&shard->lock);
 
-  return TRUE;
+  return same;
 }
 
-/* Both of these run with the table held for writing. */
+/* Both of these run with the shard held for writing. */
 
 static void
-drop_unread_entries (void)
+drop_unread_entries (ShapeShard *shard)
 {
   GHashTableIter iter;
   gpointer k, v;
   gsize freed = 0;
 
-  g_hash_table_iter_init (&iter, shape_cache);
+  g_hash_table_iter_init (&iter, shard->table);
   while (g_hash_table_iter_next (&iter, &k, &v))
     {
       const NsPangoShapeKey *key = k;
@@ -501,62 +496,49 @@ drop_unread_entries (void)
         }
     }
 
-  cache_bytes -= MIN (freed, cache_bytes);
+  shard->bytes -= MIN (freed, shard->bytes);
 }
 
 static void
-make_room (void)
+make_room (ShapeShard *shard)
 {
-  if (g_hash_table_size (shape_cache) < NS_SHAPE_CACHE_MAX_ENTRIES &&
-      cache_bytes < NS_SHAPE_CACHE_MAX_BYTES)
+  if (g_hash_table_size (shard->table) < NS_SHAPE_CACHE_MAX_ENTRIES / NS_SHAPE_CACHE_SHARDS &&
+      shard->bytes < NS_SHAPE_CACHE_MAX_BYTES / NS_SHAPE_CACHE_SHARDS)
     return;
 
   /* Dropping the lot is a cliff a browser hits mid-scroll: the next frame
    * reshapes every run on screen. Sweep away what has not been read since the
    * last sweep instead.
    */
-  drop_unread_entries ();
+  drop_unread_entries (shard);
 
-  /* A sweep walks the whole table, so it has to buy enough room to be worth
+  /* A sweep walks the whole shard, so it has to buy enough room to be worth
    * repeating -- otherwise a working set that fills the cache would sweep once
    * per insert. Getting under half the ceiling leaves at least that many inserts
    * before the next sweep; failing that, the working set really is the whole
    * cache and there is nothing better to throw away than all of it.
    */
-  if (g_hash_table_size (shape_cache) >= NS_SHAPE_CACHE_MAX_ENTRIES / 2 ||
-      cache_bytes >= NS_SHAPE_CACHE_MAX_BYTES / 2)
+  if (g_hash_table_size (shard->table) >= NS_SHAPE_CACHE_MAX_ENTRIES / NS_SHAPE_CACHE_SHARDS / 2 ||
+      shard->bytes >= NS_SHAPE_CACHE_MAX_BYTES / NS_SHAPE_CACHE_SHARDS / 2)
     {
-      g_hash_table_remove_all (shape_cache);
-      cache_bytes = 0;
+      g_hash_table_remove_all (shard->table);
+      shard->bytes = 0;
     }
 }
 
 void
-ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
+ns_pango_shape_cache_insert (const NsPangoShapeKey    *key,
                              const NsPangoGlyphString *glyphs)
 {
+  ShapeShard *shard = &shards[NS_SHAPE_CACHE_SHARD (key->hash)];
   CachedRun *run;
 
-  if (key == NULL)
+  if (glyphs->num_glyphs <= 0)
     return;
 
-  if (glyphs->num_glyphs <= 0)
-    {
-      ns_pango_shape_cache_key_free (key);
-      return;
-    }
-
-  g_rw_lock_writer_lock (&shape_cache_lock);
-
-  if (G_UNLIKELY (shape_cache == NULL))
-    shape_cache = g_hash_table_new_full (key_hash, key_equal, key_free, run_free);
-  else
-    make_room ();
-
-  run = g_hash_table_lookup (shape_cache, key);
-  if (run != NULL)
-    cache_bytes -= run_size (run, key->text_length);
-
+  /* Copying the glyphs before taking the lock keeps two allocations and two
+   * memcpys of every shaped run out of the shard's exclusive section.
+   */
   run = g_new (CachedRun, 1);
   run->num_glyphs = glyphs->num_glyphs;
   run->read = FALSE;
@@ -565,29 +547,57 @@ ns_pango_shape_cache_insert (NsPangoShapeKey          *key,
   run->log_clusters = g_memdup2 (glyphs->log_clusters,
                                  glyphs->num_glyphs * sizeof (int));
 
-  cache_bytes += run_size (run, key->text_length);
+  g_rw_lock_writer_lock (&shard->lock);
 
-  g_hash_table_replace (shape_cache, key, run);
+  if (G_UNLIKELY (shard->table == NULL))
+    shard->table = g_hash_table_new_full (key_hash, key_equal, key_free, run_free);
+  else
+    make_room (shard);
 
-  g_rw_lock_writer_unlock (&shape_cache_lock);
+  {
+    const CachedRun *old = g_hash_table_lookup (shard->table, key);
+
+    if (old != NULL)
+      shard->bytes -= MIN (run_size (old, key->text_length), shard->bytes);
+  }
+
+  shard->bytes += run_size (run, key->text_length);
+
+  g_hash_table_replace (shard->table, key_dup_owned (key), run);
+
+  g_rw_lock_writer_unlock (&shard->lock);
+}
+
+/* Break attributes are a function of the text alone, so a new font invalidates
+ * the glyphs and nothing else -- which is why only the caller who wants
+ * everything gone gets everything gone.
+ */
+static void
+drop_shaped_runs (void)
+{
+  for (guint i = 0; i < NS_SHAPE_CACHE_SHARDS; i++)
+    {
+      g_rw_lock_writer_lock (&shards[i].lock);
+
+      if (shards[i].table != NULL)
+        g_hash_table_remove_all (shards[i].table);
+      shards[i].bytes = 0;
+
+      g_rw_lock_writer_unlock (&shards[i].lock);
+    }
 }
 
 void
 ns_pango_cache_clear (void)
 {
-  g_rw_lock_writer_lock (&shape_cache_lock);
-
-  if (shape_cache != NULL)
-    g_hash_table_remove_all (shape_cache);
-  cache_bytes = 0;
-
-  g_rw_lock_writer_unlock (&shape_cache_lock);
+  drop_shaped_runs ();
+  ns_pango_break_cache_clear ();
 }
 
 void
 ns_pango_shape_cache_font_map_changed (void)
 {
-  ns_pango_cache_clear ();
+  drop_shaped_runs ();
 }
 
 void
@@ -602,9 +612,15 @@ ns_pango_cache_get_stats (guint64 *hits,
 
   if (entries)
     {
-      g_rw_lock_reader_lock (&shape_cache_lock);
-      *entries = shape_cache != NULL ? g_hash_table_size (shape_cache) : 0;
-      g_rw_lock_reader_unlock (&shape_cache_lock);
+      *entries = 0;
+
+      for (guint i = 0; i < NS_SHAPE_CACHE_SHARDS; i++)
+        {
+          g_rw_lock_reader_lock (&shards[i].lock);
+          if (shards[i].table != NULL)
+            *entries += g_hash_table_size (shards[i].table);
+          g_rw_lock_reader_unlock (&shards[i].lock);
+        }
     }
 
   if (g_getenv ("NS_PANGO_CACHE_DEBUG") != NULL)

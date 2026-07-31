@@ -836,7 +836,8 @@ ns_pango_shape_internal (const char          *item_text,
                       NsPangoGlyphString    *glyphs,
                       NsPangoShapeFlags      flags)
 {
-  NsPangoShapeKey *key;
+  NsPangoShapeKey key;
+  gboolean cacheable;
   hb_feature_t features[32];
   unsigned int num_features = 0;
 
@@ -862,34 +863,31 @@ ns_pango_shape_internal (const char          *item_text,
   ns_pango_analysis_collect_features (analysis, features,
                                       G_N_ELEMENTS (features), &num_features);
 
-  key = ns_pango_shape_cache_key_new (analysis, item_text, item_length,
-                                      paragraph_text, paragraph_length,
-                                      flags,
-                                      find_show_flags (analysis),
-                                      find_text_transform (analysis),
-                                      find_hyphen (analysis, log_attrs, num_chars),
-                                      features, num_features);
+  cacheable = ns_pango_shape_cache_key_init (&key, analysis, item_text, item_length,
+                                             paragraph_text, paragraph_length,
+                                             flags,
+                                             find_show_flags (analysis),
+                                             find_text_transform (analysis),
+                                             find_hyphen (analysis, log_attrs, num_chars),
+                                             features, num_features);
 
-  if (key != NULL &&
+  if (cacheable &&
       !ns_pango_shape_cache_verifying () &&
-      ns_pango_shape_cache_lookup (key, glyphs))
-    {
-      ns_pango_shape_cache_key_free (key);
-      return;
-    }
+      ns_pango_shape_cache_lookup (&key, glyphs))
+    return;
 
   shape_internal_uncached (item_text, item_length,
                            paragraph_text, paragraph_length,
                            analysis, log_attrs, num_chars, glyphs, flags);
 
-  if (key == NULL)
+  if (!cacheable)
     return;
 
   if (ns_pango_shape_cache_verifying () &&
-      !ns_pango_shape_cache_matches (key, glyphs))
+      !ns_pango_shape_cache_matches (&key, glyphs))
     g_warning ("shape cache mismatch on '%.*s'", item_length, item_text);
 
-  ns_pango_shape_cache_insert (key, glyphs);
+  ns_pango_shape_cache_insert (&key, glyphs);
 }
 
 /* }}} */

@@ -28,6 +28,7 @@ ns_pango_sources = [
   'pango-utils.c',
   'reorder-items.c',
   'shape.c',
+  'ns-break-cache.c',
   'ns-shape-cache.c',
 ]
 

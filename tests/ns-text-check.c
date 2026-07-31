@@ -34,6 +34,8 @@
  *   ns-text-check bench [iters]   time layout and intrinsic sizing
  *   ns-text-check threads [n]     dump the corpus from n threads at once and
  *                                 check they all agree with a lone thread
+ *   ns-text-check scale [n] [it]  lay the corpus out on 1, 2, ... n threads and
+ *                                 report how far throughput actually scales
  *   ns-text-check spacing         check word-spacing against what CSS specifies
  *   ns-text-check synthesis       check every family's advances agree between
  *                                 HarfBuzz, which measures, and cairo, which draws
@@ -306,6 +308,115 @@ dump_in_thread (gpointer data)
   return NULL;
 }
 
+static double
+elapsed_ms (GTimer *timer)
+{
+  return g_timer_elapsed (timer, NULL) * 1000.0;
+}
+
+/* Whether laying text out on several threads is worth doing is a question about
+ * this library, not about the caller: the fontmap hands out one per thread
+ * because its caches are unlocked, and the shape cache keys on the font, so
+ * threads populate the shared table with entries none of the others can use.
+ * This measures what that costs -- the same work, spread over n threads,
+ * against one thread doing all of it.
+ */
+typedef struct
+{
+  int iters;
+  int sink;
+} ScaleWork;
+
+static void
+lay_out_corpus (NsPangoContext *context,
+                int             iters,
+                int            *sink)
+{
+  for (int i = 0; i < iters; i++)
+    for (unsigned f = 0; f < G_N_ELEMENTS (fonts); f++)
+      for (unsigned m = 0; m < G_N_ELEMENTS (modes); m++)
+        for (unsigned s = 0; s < G_N_ELEMENTS (samples); s++)
+          {
+            NsPangoLayout *layout = build_layout (context, fonts[f], samples[s].text, &modes[m]);
+            int w, h;
+
+            ns_pango_layout_get_size (layout, &w, &h);
+            *sink += w + h;
+            g_object_unref (layout);
+          }
+}
+
+static gpointer
+lay_out_in_thread (gpointer data)
+{
+  ScaleWork *work = data;
+  NsPangoFontMap *map = ns_pango_cairo_font_map_get_default ();
+  NsPangoContext *context = ns_pango_font_map_create_context (map);
+
+  lay_out_corpus (context, work->iters, &work->sink);
+
+  g_object_unref (context);
+
+  return NULL;
+}
+
+static int
+do_scale (NsPangoContext *context,
+          int             max_threads,
+          int             iters)
+{
+  GTimer *timer = g_timer_new ();
+  double one_thread_ms;
+  int sink = 0;
+
+  lay_out_corpus (context, 1, &sink);
+
+  g_timer_start (timer);
+  lay_out_corpus (context, iters, &sink);
+  one_thread_ms = elapsed_ms (timer);
+
+  printf ("1 thread  %7.1f ms  %6.0f layouts/s  1.00x\n",
+          one_thread_ms,
+          iters * G_N_ELEMENTS (fonts) * G_N_ELEMENTS (modes) * G_N_ELEMENTS (samples) *
+          1000.0 / one_thread_ms);
+
+  for (int n = 2; n <= max_threads; n *= 2)
+    {
+      GThread **threads = g_new0 (GThread *, n);
+      ScaleWork *work = g_new0 (ScaleWork, n);
+      double ms;
+
+      for (int i = 0; i < n; i++)
+        work[i].iters = iters;
+
+      g_timer_start (timer);
+      for (int i = 0; i < n; i++)
+        threads[i] = g_thread_new ("layout", lay_out_in_thread, &work[i]);
+      for (int i = 0; i < n; i++)
+        g_thread_join (threads[i]);
+      ms = elapsed_ms (timer);
+
+      for (int i = 0; i < n; i++)
+        sink += work[i].sink;
+
+      printf ("%d threads %7.1f ms  %6.0f layouts/s  %.2fx\n",
+              n, ms,
+              n * iters * G_N_ELEMENTS (fonts) * G_N_ELEMENTS (modes) * G_N_ELEMENTS (samples) *
+              1000.0 / ms,
+              n * one_thread_ms / ms);
+
+      g_free (work);
+      g_free (threads);
+    }
+
+  g_timer_destroy (timer);
+
+  printf ("(checksum %d)\n", sink);
+  report_stats ();
+
+  return 0;
+}
+
 static int
 do_threads (NsPangoContext *context,
             int             n_threads)
@@ -575,12 +686,6 @@ do_synthesis (NsPangoContext *context)
   return failed;
 }
 
-static double
-elapsed_ms (GTimer *timer)
-{
-  return g_timer_elapsed (timer, NULL) * 1000.0;
-}
-
 static int
 do_bench (NsPangoContext *context,
           int             iters)
@@ -655,13 +760,18 @@ main (int    argc,
     status = do_bench (context, argc > 2 ? atoi (argv[2]) : 20);
   else if (strcmp (command, "threads") == 0)
     status = do_threads (context, argc > 2 ? MAX (atoi (argv[2]), 1) : 8);
+  else if (strcmp (command, "scale") == 0)
+    status = do_scale (context,
+                       argc > 2 ? MAX (atoi (argv[2]), 2) : 8,
+                       argc > 3 ? MAX (atoi (argv[3]), 1) : 10);
   else if (strcmp (command, "spacing") == 0)
     status = do_spacing (context);
   else if (strcmp (command, "synthesis") == 0)
     status = do_synthesis (context);
   else
     {
-      fprintf (stderr, "usage: %s [dump|bench [iterations]|threads [count]|spacing|synthesis]\n",
+      fprintf (stderr, "usage: %s [dump|bench [iterations]|threads [count]|"
+                       "scale [threads] [iterations]|spacing|synthesis]\n",
                argv[0]);
       status = 2;
     }

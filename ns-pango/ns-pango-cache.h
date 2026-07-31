@@ -41,6 +41,16 @@ void ns_pango_cache_get_stats (guint64 *hits,
                                guint64 *skipped,
                                guint64 *entries);
 
+/* The shape cache holds glyphs, keyed on the font; this one holds the unicode
+ * break attributes of a paragraph, which depend on nothing but its text. They
+ * fill and evict independently, so they are counted apart.
+ */
+NS_PANGO_AVAILABLE_IN_ALL
+void ns_pango_break_cache_stats (guint64 *hits,
+                                 guint64 *misses,
+                                 guint64 *skipped,
+                                 guint64 *entries);
+
 G_END_DECLS
 
 #endif /* __NS_PANGO_CACHE_H__ */

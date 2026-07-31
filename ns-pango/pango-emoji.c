@@ -161,6 +161,16 @@ _ns_pango_EmojiSegmentationCategory (gunichar codepoint)
   if ('0' <= codepoint && codepoint <= '9')
     return KEYCAP_BASE;
 
+  /* Below U+0080 the tables below can only match the keycap bases, which are
+   * the digits above plus these two. Deciding that here spares every other
+   * ASCII character -- punctuation and the controls, which the rest of this
+   * function would otherwise put through seven interval searches -- the whole
+   * of it.
+   */
+  if (codepoint < 0x80)
+    return (codepoint == '#' || codepoint == '*') ? KEYCAP_BASE
+                                                  : kMaxEmojiScannerCategory;
+
   switch (codepoint)
     {
     case kCombiningEnclosingKeycapCharacter:
@@ -219,6 +229,36 @@ _ns_pango_emoji_iter_init (NsPangoEmojiIter *iter,
   unsigned char *types;
   unsigned int i;
   const char *p;
+  const char *text_end;
+
+  iter->text_start = iter->start = iter->end = text;
+  if (length >= 0)
+    text_end = text + length;
+  else
+    text_end = text + strlen (text);
+  iter->text_end = text_end;
+  iter->is_emoji = FALSE;
+  iter->has_vs = FALSE;
+  iter->n_chars = n_chars;
+
+  /* Every sequence the scanner recognises needs a character above U+007F --
+   * a pictograph, a regional indicator, a variation selector, a zero-width
+   * joiner or the enclosing keycap. So ASCII is one non-emoji run by
+   * construction, and saying so directly skips both the per-character
+   * classification and the scanner over the text most pages are made of.
+   */
+  for (p = text; p < text_end; p++)
+    if ((unsigned char) *p >= 0x80)
+      break;
+
+  if (p == text_end)
+    {
+      iter->types = iter->types_;
+      iter->cursor = n_chars;
+      iter->end = text_end;
+
+      return iter;
+    }
 
   if (n_chars < 64)
     types = iter->types_;
@@ -232,16 +272,7 @@ _ns_pango_emoji_iter_init (NsPangoEmojiIter *iter,
     p = g_utf8_next_char (p);
   }
 
-  iter->text_start = iter->start = iter->end = text;
-  if (length >= 0)
-    iter->text_end = text + length;
-  else
-    iter->text_end = text + strlen (text);
-  iter->is_emoji = FALSE;
-  iter->has_vs = FALSE;
-
   iter->types = types;
-  iter->n_chars = n_chars;
   iter->cursor = 0;
 
   _ns_pango_emoji_iter_next (iter);
