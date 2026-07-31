@@ -224,6 +224,14 @@ attaches_to_neighbour (gunichar ch)
  * The cut must be a function of the bytes alone and of nothing around them,
  * or the same word would be cut differently depending on which item it turned
  * up in, and the pieces would never match.
+ *
+ * Only a space will do, never an ideograph -- although an ideograph is a
+ * boundary good enough to admit a whole item, which begins and ends where the
+ * itemiser put it. Noto Sans CJK adjusts an ideograph's advance against the one
+ * beside it, so cutting between two of them and keeping the halves separately
+ * gives each the width it had next to whatever happened to follow it that time:
+ * 15360 in one paragraph and 14336 in the next. The fork's own dump caught it
+ * on a machine with the font installed.
  */
 static gboolean
 segment_starts_here (const char *p,
@@ -240,7 +248,7 @@ segment_starts_here (const char *p,
 
   before = g_utf8_get_char (g_utf8_prev_char (p));
 
-  return boundary_char (before);
+  return space_boundary_char (before);
 }
 
 guint
