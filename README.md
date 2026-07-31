@@ -72,6 +72,11 @@ agree between HarfBuzz, which measures, and cairo, which draws; and
 `bench` times laying a paragraph out and measuring it the way intrinsic
 sizing does.
 
+`BROWSER-COMPARISON.md` sets all of this against the equivalent code in Firefox
+and Chrome — what each caches and how it bounds it, where the performance comes
+from, and what each lets a page reach — and records what that comparison found
+here.
+
 Upstream's own description follows.
 
 Pango
