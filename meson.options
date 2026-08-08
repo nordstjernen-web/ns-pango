@@ -2,11 +2,14 @@
 # Xft options went with the code they configured; passing one now is an error
 # rather than a silent no-op.
 
+# Accepted, never acted on. This fork builds no introspection data; the option
+# stays because Northstar's subproject() call passes it, and meson rejects an
+# option a subproject does not declare. Setting it to 'enabled' is an error.
 option('introspection',
        type: 'feature',
-       value: 'auto',
+       value: 'disabled',
        yield: true,
-       description: 'Build the introspection data (requires gobject-introspection)')
+       description: 'Accepted for compatibility; this fork builds no introspection data')
 
 option('build-testsuite',
        description : 'Build tests/ns-text-check, the shaping equivalence and timing harness',
