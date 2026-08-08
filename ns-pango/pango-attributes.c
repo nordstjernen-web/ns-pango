@@ -2543,7 +2543,22 @@ ns_pango_attr_list_equal (NsPangoAttrList *list,
       for (other_attr_index = 0; other_attr_index < other_attrs->len; other_attr_index++)
         {
           NsPangoAttribute *other_attr = g_ptr_array_index (other_attrs, other_attr_index);
-          guint64 other_attr_bitmask = other_attr_index < 64 ? 1 << other_attr_index : 0;
+          /* The shift has to happen in 64 bits. Shifting a plain 1 -- an int --
+           * by 31 overflows it into a mask with every bit from 31 up set, and
+           * by 32 or more is undefined outright and in practice aliases a much
+           * lower index. Either way the bitmask marks attributes as already
+           * matched that never were, and the attribute that needed one of them
+           * finds no candidate left. Measured: two lists built identically
+           * compared equal up to 32 attributes and unequal at 33 and above.
+           *
+           * Nothing noticed while this was only change detection, which errs
+           * safe by re-doing work. The item cache put it on a path where the
+           * answer is a cache key, so every paragraph carrying more than 32
+           * attributes missed every time.
+           */
+          guint64 other_attr_bitmask = other_attr_index < 64
+                                     ? G_GUINT64_CONSTANT (1) << other_attr_index
+                                     : 0;
 
           if ((skip_bitmask & other_attr_bitmask) != 0)
             continue;
