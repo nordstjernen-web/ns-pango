@@ -31,9 +31,13 @@ Three things about that are part of the contract and easy to break by accident:
   `libpango_dep` and `libpangocairo_dep` matter as much as the library names.
   It does not take `libpangoft2_dep`, though the wrap's `[provide]` block lists
   it, so `ns-pangoft2` is only linked transitively.
-- The **option names** above must keep existing. `fontconfig`, `freetype`,
-  `introspection`, `sysprof` and `libthai` are load-bearing; the options this
-  fork deleted (`xft`, `documentation`, `gtk_doc`, `man-pages`,
+- The **option names** above must keep existing — meson rejects an option a
+  subproject does not declare, so deleting one breaks this call rather than
+  being ignored by it. `fontconfig`, `freetype`, `sysprof` and `libthai` are
+  load-bearing; `introspection` is declared only so that passing
+  `introspection=disabled` keeps working, since the fork builds no
+  introspection data and asking for it in earnest is now an error. The options
+  this fork deleted (`xft`, `documentation`, `gtk_doc`, `man-pages`,
   `build-examples`) were not passed by anything.
 - It builds **static**, which is why a broken shared link went unnoticed for so
   long: an unresolved symbol in an archive member nothing references is not an
@@ -346,6 +350,14 @@ the font for shaping.
 - ThreadSanitizer reports races inside fontconfig's own `FcFontSetMatch` and
   `FcFontSetSort` when two fontmaps match concurrently. They do not currently
   change output, and AddressSanitizer is clean.
+- `ns_pango_attr_list_equal` compares two lists by scanning the second one for
+  each attribute of the first, so it is quadratic in the number of attributes.
+  It used to be called when a caller went looking for a change; the item cache
+  now calls it on every itemise, once per paragraph. Northstar builds a layout
+  per inline box, so its lists are short and this does not show up in a
+  profile — but a paragraph with a few hundred spans would pay for it, and the
+  function's documented misbehaviour on duplicate attributes is what makes
+  sorting or hashing it less trivial than it looks.
 - Pango splits letter spacing half before and half after each cluster, where
   CSS adds it after each character. Changing it would move every glyph in every
   layout.

@@ -79,8 +79,12 @@ requires the same geometry both times, which is what a cache that keys on
 the wrong thing breaks; `threads` checks that threads sharing the cache agree
 with a thread on its own; `spacing` checks word-spacing against CSS;
 `synthesis` checks that every family's advances agree between HarfBuzz, which
-measures, and cairo, which draws; and `bench` times laying a paragraph out and
-measuring it the way intrinsic sizing does.
+measures, and cairo, which draws; `bench` times laying a paragraph out and
+measuring it the way intrinsic sizing does; and `scale [threads] [iterations]`
+times the same corpus on one thread and then on two, four and so on, which is
+where the throughput figures in `NORTHSTAR-INTEGRATION.md` come from. Setting
+`NS_PANGO_CACHE_DEBUG` makes the harness print the skip reasons alongside the
+hit and miss counts it reports on stderr.
 
 `BROWSER-COMPARISON.md` sets all of this against the equivalent code in Firefox
 and Chrome — what each caches and how it bounds it, where the performance comes
