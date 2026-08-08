@@ -85,11 +85,25 @@ typedef struct
  */
 #define ITEM_OVERHEAD_ESTIMATE (sizeof (NsPangoItem) + 2 * sizeof (GList) + 64)
 
+/* The key keeps its own deep copy of the attribute list -- ns_pango_attr_list_copy
+ * copies every attribute, it does not take a reference -- and that copy is the
+ * whole list the layout was built with, not the part covering this paragraph.
+ * A page whose body carries a few hundred attributes therefore pays for them
+ * once per cached paragraph, which is enough to be the largest thing in the
+ * cache and was not counted against the ceiling at all. The largest attribute
+ * is a font description, so a pointer's worth of slack per attribute is the
+ * same kind of estimate as the line above.
+ */
+#define ATTR_OVERHEAD_ESTIMATE (sizeof (NsPangoAttribute) + sizeof (gpointer) + 64)
+
 static gsize
 item_entry_size (const ItemEntry *entry)
 {
+  GPtrArray *attrs = entry->key.attrs ? entry->key.attrs->attributes : NULL;
+
   return sizeof (ItemEntry) + entry->key.length +
-         g_list_length (entry->items) * ITEM_OVERHEAD_ESTIMATE;
+         g_list_length (entry->items) * ITEM_OVERHEAD_ESTIMATE +
+         (attrs != NULL ? attrs->len * ATTR_OVERHEAD_ESTIMATE : 0);
 }
 
 typedef struct
