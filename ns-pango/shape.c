@@ -973,9 +973,10 @@ segment_key (const SegmentPlan *plan,
 
 /* Divides a glyph string that was shaped whole along the item's cut points,
  * and stores each piece. Stores nothing at all if the glyphs of a piece are not
- * one unbroken stretch of the string, or if the pieces do not lie in the order
- * the shaper laid them down -- both of which the cut rule is there to hold up,
- * and neither of which is worth trusting without looking.
+ * one unbroken stretch of the string, if a piece drew no glyphs at all, or if
+ * the pieces do not lie in the order the shaper laid them down -- all of which
+ * the cut rule is there to hold up, and none of which is worth trusting
+ * without looking.
  *
  * A piece is stored only when the shaper agreed to both of the cuts that made
  * it. The cuts at the item's own two ends are not the shaper's to judge: what
@@ -1029,21 +1030,35 @@ insert_segments (const SegmentPlan        *plan,
   if (seen != glyphs->num_glyphs)
     return n;
 
+  /* A piece that drew no glyphs at all did not vanish -- its characters were
+   * swallowed by a cluster belonging to the piece before it, which is what
+   * HarfBuzz does when a ligature spans a cut. That neighbour would then be
+   * stored under its own bytes while carrying glyphs for text those bytes do
+   * not contain, and serving it beside anything else would draw the swallowed
+   * characters twice or not at all. The merged cluster also takes the cut's
+   * offset out of the glyph string, so the UNSAFE_TO_CONCAT check below never
+   * sees the cut to refuse it.
+   *
+   * Refusing before anything is stored, rather than counting the empty piece
+   * against @refused, is the difference between the item being kept whole and
+   * the bad neighbour already being in the table by the time we say so.
+   */
+  for (guint i = 0; i < n; i++)
+    if (count[i] == 0)
+      return n;
+
   for (guint i = 1; i < n; i++)
     {
       guint a = backwards ? n - i : i - 1;
       guint b = backwards ? n - i - 1 : i;
 
-      if (count[a] > 0 && count[b] > 0 && first[a] > first[b])
+      if (first[a] > first[b])
         return n;
     }
 
   for (guint i = 0; i < n; i++)
     {
       NsPangoShapeKey key;
-
-      if (count[i] == 0)
-        continue;
 
       if ((i > 0 && cuts->unsafe[i]) ||
           (i + 1 < n && cuts->unsafe[i + 1]) ||
