@@ -2489,9 +2489,9 @@ tailor_break (const char    *text,
 void
 ns_pango_default_break (const char    *text,
                      int            length,
-                     NsPangoAnalysis *analysis G_GNUC_UNUSED,
+                     NsPangoAnalysis *analysis,
                      NsPangoLogAttr  *attrs,
-                     int            attrs_len G_GNUC_UNUSED)
+                     int            attrs_len)
 {
   NsPangoLogAttr before = *attrs;
 
