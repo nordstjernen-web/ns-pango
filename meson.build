@@ -233,6 +233,11 @@ elif get_option('optimization') in ['2', '3', 's']
 endif
 
 # Dependencies
+#
+# The floors are what Ubuntu 24.04 ships, because that is the oldest thing
+# Northstar's CI builds against, and this fork never falls back to building a
+# dependency from source. Raising one here means dropping that platform.
+
 ns_pango_deps = []
 
 glib_major_req = 2
@@ -245,9 +250,15 @@ harfbuzz_req   = '>= 8.3.0'
 fontconfig_req = '>= 2.15.0'
 cairo_req      = '>= 1.18.0'
 
+# MIN_REQUIRED alone only silences deprecations up to the floor. MAX_ALLOWED is
+# the half that guards the floor itself: without it, a patch written on a
+# current glib can reach for API Ubuntu 24.04 does not have and compile
+# perfectly here, and the break only turns up on the oldest CI runner. With it,
+# glib warns on the machine the patch was written on.
 add_project_arguments([
     '-DG_LOG_USE_STRUCTURED=1',
     '-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_@0@_@1@'.format(glib_major_req, glib_minor_req),
+    '-DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_@0@_@1@'.format(glib_major_req, glib_minor_req),
   ],
   language: 'c'
 )
