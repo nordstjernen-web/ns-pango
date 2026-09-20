@@ -4008,6 +4008,14 @@ ns_pango_fc_font_map_add_font_file (NsPangoFontMap  *fontmap,
   for (int i = 0; i < fonts->nfont; i++)
     ns_pango_fc_font_map_add_pattern (fcfontmap, fonts->fonts[i]);
 
+  /* A font arriving changes what every context over this map resolves, and
+   * the contexts only find out through the serial. config_changed and
+   * cache_clear bump it; this path did not, so a context kept its cached
+   * metrics and itemisation for the fonts it had before.
+   */
+  if (fonts->nfont > 0)
+    ns_pango_font_map_changed (fontmap);
+
   FcFontSetDestroy (fonts);
   FcFontSetDestroy (set);
 
