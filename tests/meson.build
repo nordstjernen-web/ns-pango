@@ -26,6 +26,10 @@ test('threads', ns_text_check, args: [ 'threads', '8' ], timeout: 240)
 # Nothing a paragraph is laid out behind may change how it comes out.
 test('reuse', ns_text_check, args: [ 'reuse' ], timeout: 120)
 
+# Nor where it sits in its text, nor what the attributes over the rest of the
+# text say.
+test('position', ns_text_check, args: [ 'position' ], timeout: 60)
+
 # word-spacing has to put space exactly where CSS Text says it goes.
 test('spacing', ns_text_check, args: [ 'spacing' ], timeout: 60)
 

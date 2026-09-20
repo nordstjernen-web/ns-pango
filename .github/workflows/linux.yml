@@ -170,6 +170,13 @@ jobs:
       - name: Check a warm cache changes nothing
         run: builddir/tests/ns-text-check reuse
 
+      # Attributes are ranges over the whole text, and a paragraph is only part
+      # of it. The item cache once served the second of two identical paragraphs
+      # the bold that covered the first, and the shape cache served a word a
+      # feature range that covered the word before it.
+      - name: Check a paragraph is the same wherever it sits
+        run: builddir/tests/ns-text-check position
+
       # word-spacing has to add space where CSS Text says it does and nowhere
       # else, in every script and both directions.
       - name: Check word-spacing against CSS
@@ -234,7 +241,7 @@ jobs:
       # is per-thread and never torn down, which is not a bug this job is for.
       - name: Run every harness mode under the sanitizers
         run: |
-          for mode in dump reuse spacing synthesis; do
+          for mode in dump reuse position spacing synthesis; do
             builddir/tests/ns-text-check $mode > /dev/null
           done
           builddir/tests/ns-text-check threads 8

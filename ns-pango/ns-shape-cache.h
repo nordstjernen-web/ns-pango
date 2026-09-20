@@ -52,9 +52,17 @@ typedef struct
   guint32      n_features;
   guint32      text_length;
   const char  *text;
-  hb_feature_t features[8];
+  hb_feature_t features[16];
   char         owned_text[];
 } NsPangoShapeKey;
+
+/* The feature ranges in a key are relative to the key's own text and clipped
+ * to it, whatever offsets the caller's features carry. A font-features
+ * attribute is not one the itemiser splits items on, so it can cover part of
+ * an item, and its range is an absolute offset into the paragraph. The same
+ * bytes under the same feature at two offsets shape differently; stored under
+ * the caller's ranges they would share a key.
+ */
 
 /* What shaping will do to a hyphenated item: which hyphen it appends, if the
  * font has one, and whether it drops the character before the break. Both

@@ -77,7 +77,10 @@ with the cache serving, off and verifying; `reuse` lays a paragraph out on
 its own and again behind two dozen others that share words with it, and
 requires the same geometry both times, which is what a cache that keys on
 the wrong thing breaks; `threads` checks that threads sharing the cache agree
-with a thread on its own; `spacing` checks word-spacing against CSS;
+with a thread on its own; `position` lays the same paragraph out at different
+offsets in its text, with attributes that cover only its neighbours, and
+requires every line to match its mirror image; `spacing` checks word-spacing
+against CSS;
 `synthesis` checks that every family's advances agree between HarfBuzz, which
 measures, and cairo, which draws; `bench` times laying a paragraph out and
 measuring it the way intrinsic sizing does; and `scale [threads] [iterations]`

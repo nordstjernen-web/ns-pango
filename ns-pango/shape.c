@@ -1242,6 +1242,7 @@ ns_pango_shape_internal (const char          *item_text,
   gboolean cacheable;
   guint show_flags;
   NsPangoTextTransform transform;
+  guint transform_key;
   NsPangoShapeHyphen hyphen;
   hb_feature_t features[32];
   unsigned int num_features = 0;
@@ -1287,9 +1288,17 @@ ns_pango_shape_internal (const char          *item_text,
                         show_flags, features, num_features))
     return;
 
+  /* Capitalising reads is_word_start out of the log attrs, and a caller that
+   * brought none gets no capitalisation at all. Those two shape differently
+   * under the same transform, so the key has to tell them apart.
+   */
+  transform_key = transform;
+  if (transform == NS_PANGO_TEXT_TRANSFORM_CAPITALIZE && log_attrs == NULL)
+    transform_key |= 1u << 8;
+
   cacheable = ns_pango_shape_cache_key_init (&key, analysis, item_text, item_length,
                                              paragraph_text, paragraph_length,
-                                             flags, show_flags, transform, hyphen,
+                                             flags, show_flags, transform_key, hyphen,
                                              features, num_features);
 
   if (cacheable &&

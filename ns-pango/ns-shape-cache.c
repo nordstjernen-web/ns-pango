@@ -447,11 +447,36 @@ ns_pango_shape_cache_key_init (NsPangoShapeKey       *key,
   key->show_flags = show_flags;
   key->transform = transform;
   key->hyphen = hyphen;
-  key->n_features = n_features;
   key->text_length = item_length;
   key->text = item_text;
-  if (n_features > 0)
-    memcpy (key->features, features, n_features * sizeof (hb_feature_t));
+
+  /* HarfBuzz applies a feature to the clusters in [start, end), and a cluster
+   * here is a byte offset into the paragraph. A key describes the item's own
+   * bytes, so the ranges go into it relative to those bytes and clipped to
+   * them; a feature that reaches none of them is left out, because it did not
+   * shape any of them. Ranges are unsigned, and a font's own features run to
+   * (unsigned) -1.
+   */
+  {
+    guint offset = (guint) (item_text - paragraph_text);
+    guint n = 0;
+
+    for (guint i = 0; i < n_features; i++)
+      {
+        hb_feature_t f = features[i];
+        guint start = f.start <= offset ? 0 : MIN (f.start - offset, (guint) item_length);
+        guint end = f.end <= offset ? 0 : MIN (f.end - offset, (guint) item_length);
+
+        if (start >= end)
+          continue;
+
+        f.start = start;
+        f.end = end;
+        key->features[n++] = f;
+      }
+
+    key->n_features = n;
+  }
 
   hash = 5381;
   for (int i = 0; i < item_length; i++)
@@ -466,8 +491,12 @@ ns_pango_shape_cache_key_init (NsPangoShapeKey       *key,
   hash = hash * 33 + key->show_flags;
   hash = hash * 33 + key->transform;
   hash = hash * 33 + key->hyphen;
-  for (guint i = 0; i < n_features; i++)
-    hash = hash * 33 + (guint) key->features[i].tag + key->features[i].value;
+  for (guint i = 0; i < key->n_features; i++)
+    {
+      hash = hash * 33 + (guint) key->features[i].tag + key->features[i].value;
+      hash = hash * 33 + key->features[i].start;
+      hash = hash * 33 + key->features[i].end;
+    }
   key->hash = mix_hash (hash);
 
   return TRUE;

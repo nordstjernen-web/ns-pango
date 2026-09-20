@@ -41,6 +41,9 @@
  *                                 HarfBuzz, which measures, and cairo, which draws
  *   ns-text-check reuse           check a paragraph comes out the same whatever
  *                                 the process laid out before it
+ *   ns-text-check position        check a paragraph comes out the same wherever
+ *                                 it sits in its text, and whatever attribute
+ *                                 ranges the text around it carries
  */
 
 #include <ns-pango/pangocairo.h>
@@ -394,6 +397,168 @@ do_reuse (NsPangoContext *context)
   printf ("checked %zu texts in %zu fonts against a warm cache: %s\n",
           G_N_ELEMENTS (reuse_texts), G_N_ELEMENTS (reuse_fonts),
           failures ? "MISMATCH" : "every one identical");
+
+  return failures ? 1 : 0;
+}
+
+/* The item and shape caches key on a paragraph's bytes; the attributes that
+ * reach them are ranges over the whole text, not over the paragraph. Both got
+ * that wrong once: the item cache served the second "Hello" of "Hello\nHello"
+ * the bold that covered only the first, and the shape cache served "AV" the
+ * feature range that covered only the "xy" before it. Neither shows up in the
+ * corpus dumps, where every paragraph is its own text at offset zero, nor in
+ * `reuse', which carries no attributes.
+ *
+ * Two layouts are the mirror of each other -- the same text, the same
+ * attribute on the other paragraph -- and each line of one has to match the
+ * opposite line of the other. That needs no uncached reference, which the
+ * process cannot produce once the cache is on: the cache would have to get
+ * both paragraphs wrong in exactly the way that keeps them symmetric.
+ */
+static char *
+describe_line (NsPangoLayout *layout,
+               int            line_no)
+{
+  GString *s = g_string_new (NULL);
+  NsPangoLayoutLine *line = ns_pango_layout_get_line_readonly (layout, line_no);
+
+  for (GSList *l = line ? line->runs : NULL; l; l = l->next)
+    {
+      NsPangoLayoutRun *run = l->data;
+      NsPangoFontDescription *desc = ns_pango_font_describe (run->item->analysis.font);
+      char *name = ns_pango_font_description_to_string (desc);
+
+      g_string_append_printf (s, "%s:", name);
+      for (int i = 0; i < run->glyphs->num_glyphs; i++)
+        {
+          const NsPangoGlyphInfo *g = &run->glyphs->glyphs[i];
+
+          g_string_append_printf (s, " %u/%d/%d/%d", g->glyph, g->geometry.width,
+                                  g->geometry.x_offset, g->geometry.y_offset);
+        }
+      g_string_append (s, ";");
+
+      g_free (name);
+      ns_pango_font_description_free (desc);
+    }
+
+  return g_string_free (s, FALSE);
+}
+
+static NsPangoLayout *
+build_attributed (NsPangoContext   *context,
+                  const char       *font,
+                  const char       *text,
+                  NsPangoAttribute *attr,
+                  guint             start,
+                  guint             end)
+{
+  NsPangoLayout *layout = build_layout (context, font, text, &modes[0]);
+  NsPangoAttrList *attrs = ns_pango_attr_list_new ();
+
+  attr->start_index = start;
+  attr->end_index = end;
+  ns_pango_attr_list_insert (attrs, attr);
+  ns_pango_layout_set_attributes (layout, attrs);
+  ns_pango_attr_list_unref (attrs);
+
+  return layout;
+}
+
+static int
+expect_same_line (const char    *what,
+                  NsPangoLayout *a,
+                  int            line_a,
+                  NsPangoLayout *b,
+                  int            line_b)
+{
+  char *da = describe_line (a, line_a);
+  char *db = describe_line (b, line_b);
+  int failed = strcmp (da, db) != 0;
+
+  if (failed)
+    fprintf (stderr, "%s: line %d came out as\n  %s\nbut line %d of the mirror as\n  %s\n",
+             what, line_a, da, line_b, db);
+
+  g_free (da);
+  g_free (db);
+
+  return failed;
+}
+
+static int
+do_position (NsPangoContext *context)
+{
+  static const char *position_fonts[] = { "sans 16", "serif 22", "Arial 16" };
+  int failures = 0;
+
+  for (unsigned f = 0; f < G_N_ELEMENTS (position_fonts); f++)
+    {
+      const char *font = position_fonts[f];
+      NsPangoLayout *a, *b, *warm, *fresh;
+
+      /* An itemisation attribute on one paragraph of two that read the same. */
+      ns_pango_cache_clear ();
+      a = build_attributed (context, font, "Hello\nHello",
+                            ns_pango_attr_weight_new (NS_PANGO_WEIGHT_BOLD), 0, 5);
+      b = build_attributed (context, font, "Hello\nHello",
+                            ns_pango_attr_weight_new (NS_PANGO_WEIGHT_BOLD), 6, 11);
+      failures += expect_same_line ("bold on the first paragraph", a, 0, b, 1);
+      failures += expect_same_line ("bold on the second paragraph", a, 1, b, 0);
+      g_object_unref (a);
+      g_object_unref (b);
+
+      /* A shaping feature that is not an itemisation attribute, so it can cover
+       * part of an item: the range names paragraph bytes, and the same word at
+       * another offset must not pick it up. The first layout puts every word
+       * of the target into the cache under the target's own feature range.
+       */
+      ns_pango_cache_clear ();
+      a = build_attributed (context, font, "xy ",
+                            ns_pango_attr_font_features_new ("kern=0"), 0, 2);
+      b = build_attributed (context, font, "AV",
+                            ns_pango_attr_font_features_new ("kern=0"), 0, 2);
+      ns_pango_layout_get_line_count (a);
+      ns_pango_layout_get_line_count (b);
+      warm = build_attributed (context, font, "xy AV",
+                               ns_pango_attr_font_features_new ("kern=0"), 0, 2);
+      /* A layout shapes when first asked, not when built, and the point is
+       * that this one shapes against what the primers left behind.
+       */
+      ns_pango_layout_get_line_count (warm);
+      g_object_unref (a);
+      g_object_unref (b);
+
+      ns_pango_cache_clear ();
+      fresh = build_attributed (context, font, "xy AV",
+                                ns_pango_attr_font_features_new ("kern=0"), 0, 2);
+      failures += expect_same_line ("feature on the first word", warm, 0, fresh, 0);
+      g_object_unref (warm);
+      g_object_unref (fresh);
+
+      /* And the other way round: the feature on the second word, primed by the
+       * same word shaped with the feature covering all of it.
+       */
+      ns_pango_cache_clear ();
+      a = build_attributed (context, font, "AV",
+                            ns_pango_attr_font_features_new ("kern=0"), 0, 2);
+      ns_pango_layout_get_line_count (a);
+      warm = build_attributed (context, font, "xy AV",
+                               ns_pango_attr_font_features_new ("kern=0"), 3, 5);
+      ns_pango_layout_get_line_count (warm);
+      g_object_unref (a);
+
+      ns_pango_cache_clear ();
+      fresh = build_attributed (context, font, "xy AV",
+                                ns_pango_attr_font_features_new ("kern=0"), 3, 5);
+      failures += expect_same_line ("feature on the second word", warm, 0, fresh, 0);
+      g_object_unref (warm);
+      g_object_unref (fresh);
+    }
+
+  printf ("checked paragraphs at every offset in %zu fonts: %s\n",
+          G_N_ELEMENTS (position_fonts),
+          failures ? "MISMATCH" : "every one the same");
 
   return failures ? 1 : 0;
 }
@@ -886,10 +1051,12 @@ main (int    argc,
     status = do_synthesis (context);
   else if (strcmp (command, "reuse") == 0)
     status = do_reuse (context);
+  else if (strcmp (command, "position") == 0)
+    status = do_position (context);
   else
     {
       fprintf (stderr, "usage: %s [dump|bench [iterations]|threads [count]|"
-                       "scale [threads] [iterations]|spacing|synthesis|reuse]\n",
+                       "scale [threads] [iterations]|spacing|synthesis|reuse|position]\n",
                argv[0]);
       status = 2;
     }
