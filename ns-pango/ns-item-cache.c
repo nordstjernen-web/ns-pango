@@ -138,7 +138,53 @@ item_key_hash (gconstpointer v)
 /* The attribute lists are compared in full. Two layouts over the same paragraph
  * build their own lists with the same content, which is exactly the case worth
  * catching, so identity would never match and only equality will do.
+ *
+ * They are compared in order, though, and not with ns_pango_attr_list_equal().
+ * That function answers whether two lists hold the same attributes in any
+ * order, and it does so by scanning the second list for each attribute of the
+ * first: quadratic, and paid here once per paragraph per layout, so a page
+ * whose body carries a few hundred spans would spend longer comparing lists
+ * than itemising. A list keeps its attributes sorted by start index, and a
+ * browser builds the list for a paragraph the same way every time it lays the
+ * paragraph out, so lists that are equal are also in the same order -- and
+ * two that are not will simply miss, which costs an itemise and never a wrong
+ * answer.
  */
+static gboolean
+attr_lists_equal_in_order (NsPangoAttrList *a,
+                           NsPangoAttrList *b)
+{
+  GPtrArray *pa, *pb;
+
+  if (a == b)
+    return TRUE;
+
+  if (a == NULL || b == NULL)
+    return FALSE;
+
+  pa = a->attributes;
+  pb = b->attributes;
+
+  if (pa == NULL || pb == NULL)
+    return pa == pb;
+
+  if (pa->len != pb->len)
+    return FALSE;
+
+  for (guint i = 0; i < pa->len; i++)
+    {
+      const NsPangoAttribute *x = g_ptr_array_index (pa, i);
+      const NsPangoAttribute *y = g_ptr_array_index (pb, i);
+
+      if (x->start_index != y->start_index ||
+          x->end_index != y->end_index ||
+          !ns_pango_attribute_equal (x, y))
+        return FALSE;
+    }
+
+  return TRUE;
+}
+
 static gboolean
 item_key_equal (gconstpointer a,
                 gconstpointer b)
@@ -154,11 +200,7 @@ item_key_equal (gconstpointer a,
       memcmp (ka->text, kb->text, ka->length) != 0)
     return FALSE;
 
-  if ((ka->attrs == NULL) != (kb->attrs == NULL))
-    return FALSE;
-
-  return ka->attrs == NULL ||
-         ns_pango_attr_list_equal (ka->attrs, kb->attrs);
+  return attr_lists_equal_in_order (ka->attrs, kb->attrs);
 }
 
 static void

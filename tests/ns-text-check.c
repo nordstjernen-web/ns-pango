@@ -259,6 +259,20 @@ report_stats (void)
       fprintf (stderr, "[ns-pango] skips: font=%llu len=%llu features=%llu context=%llu\n",
                (unsigned long long) no_font, (unsigned long long) too_long,
                (unsigned long long) features, (unsigned long long) context);
+
+      /* The other two caches, so that a change to what the item cache keys on
+       * -- which the glyph dump cannot see, because a miss there only costs an
+       * itemise -- still shows up as a hit count that moved.
+       */
+      ns_pango_break_cache_stats (&hits, &misses, &skipped, &entries);
+      fprintf (stderr, "[ns-pango] break cache: hits=%llu misses=%llu skipped=%llu entries=%llu\n",
+               (unsigned long long) hits, (unsigned long long) misses,
+               (unsigned long long) skipped, (unsigned long long) entries);
+
+      ns_pango_item_cache_stats (&hits, &misses, &skipped, &entries);
+      fprintf (stderr, "[ns-pango] item cache: hits=%llu misses=%llu skipped=%llu entries=%llu\n",
+               (unsigned long long) hits, (unsigned long long) misses,
+               (unsigned long long) skipped, (unsigned long long) entries);
     }
 }
 

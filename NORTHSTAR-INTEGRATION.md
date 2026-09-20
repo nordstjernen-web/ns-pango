@@ -352,12 +352,14 @@ the font for shaping.
   change output, and AddressSanitizer is clean.
 - `ns_pango_attr_list_equal` compares two lists by scanning the second one for
   each attribute of the first, so it is quadratic in the number of attributes.
-  It used to be called when a caller went looking for a change; the item cache
-  now calls it on every itemise, once per paragraph. Northstar builds a layout
-  per inline box, so its lists are short and this does not show up in a
-  profile — but a paragraph with a few hundred spans would pay for it, and the
-  function's documented misbehaviour on duplicate attributes is what makes
-  sorting or hashing it less trivial than it looks.
+  The item cache no longer calls it: it compares the two lists in order, which
+  is linear, and relies on a list keeping its attributes sorted by start index
+  and on the browser building a paragraph's list the same way each time. Two
+  lists with the same attributes in a different order miss the cache rather
+  than match, which costs an itemise and never a wrong answer. The public
+  function is unchanged, and `ns_pango_layout_set_attributes` still uses it
+  for change detection, where a layout with a few hundred spans pays for it
+  once per `set_attributes` call.
 - Pango splits letter spacing half before and half after each cluster, where
   CSS adds it after each character. Changing it would move every glyph in every
   layout.
