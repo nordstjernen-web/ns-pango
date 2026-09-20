@@ -1,5 +1,5 @@
 project('ns-pango', 'c',
-        version: '1.58.0',
+        version: '1.58.2',
         license: 'LGPL-2.1-or-later',
         license_files: 'COPYING',
         default_options: [

@@ -428,8 +428,8 @@ add_overline (NsPangoRenderer    *renderer,
   int underline_thickness = ns_pango_font_metrics_get_underline_thickness (metrics);
   int ascent = ns_pango_font_metrics_get_ascent (metrics);
 
-  new_rect.x = base_x + ink_rect->x;
-  new_rect.width = ink_rect->width;
+  new_rect.x = base_x + MIN (ink_rect->x, logical_rect->x);
+  new_rect.width = MAX (ink_rect->width, logical_rect->width);
   new_rect.height = underline_thickness;
   new_rect.y = base_y;
 
@@ -483,8 +483,8 @@ add_strikethrough (NsPangoRenderer    *renderer,
   int strikethrough_thickness = ns_pango_font_metrics_get_strikethrough_thickness (metrics);
   int strikethrough_position = ns_pango_font_metrics_get_strikethrough_position (metrics);
 
-  new_rect.x = base_x + ink_rect->x;
-  new_rect.width = ink_rect->width;
+  new_rect.x = base_x + MIN (ink_rect->x, logical_rect->x);
+  new_rect.width = MAX (ink_rect->width, logical_rect->width);
   new_rect.y = (base_y - strikethrough_position) * num_glyphs;
   new_rect.height = strikethrough_thickness * num_glyphs;
 
@@ -704,12 +704,12 @@ ns_pango_renderer_draw_layout_line (NsPangoRenderer   *renderer,
                                             run->item->analysis.language);
 
           if (renderer->underline != NS_PANGO_UNDERLINE_NONE)
-            add_underline (renderer, &state,metrics,
+            add_underline (renderer, &state, metrics,
                            x + x_off, y - y_off,
                            ink, logical);
 
           if (renderer->priv->overline != NS_PANGO_OVERLINE_NONE)
-            add_overline (renderer, &state,metrics,
+            add_overline (renderer, &state, metrics,
                            x + x_off, y - y_off,
                            ink, logical);
 

@@ -1,3 +1,18 @@
+Overview of changes in 1.58.2, 05-08-2026
+=========================================
+
+* No changes
+
+Overview of changes in 1.58.1, 03-08-2026
+=========================================
+
+* Require harfbuzz 11
+* Require glib 2.88
+* CoreText: Support variations
+* CoreText: Support font features from descriptions
+* Renderer: Keep over/under/through lines in sync
+* Fixes for undefined behavior
+
 Overview of changes in 1.58.0, 26-06-2026
 =========================================
 
