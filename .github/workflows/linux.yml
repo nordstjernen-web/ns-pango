@@ -182,3 +182,61 @@ jobs:
 
       - name: Run the harness under the meson test runner
         run: meson test -C builddir --print-errorlogs
+
+  # The caches hand out memcpy'd glyph strings, walk raw UTF-8 with cluster
+  # offsets, and share tables between threads. The dumps above prove they return
+  # the right glyphs; this proves they do so without reading past a buffer or
+  # overflowing an offset on the way, which a correct-looking dump cannot show.
+  sanitize:
+    name: ubuntu-latest (clang, ASan + UBSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      CC: clang
+      ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang pkg-config meson ninja-build \
+            libglib2.0-dev libcairo2-dev libharfbuzz-dev libfribidi-dev \
+            libfontconfig-dev libfreetype-dev libthai-dev \
+            fonts-dejavu-core fonts-noto-cjk fonts-liberation
+
+      - name: Configure
+        run: |
+          meson setup builddir \
+            -Ddefault_library=static \
+            -Dfontconfig=enabled \
+            -Dfreetype=enabled \
+            -Dintrospection=disabled \
+            -Dsysprof=disabled \
+            -Dlibthai=auto \
+            -Dbuild-testsuite=true \
+            -Dbuildtype=debugoptimized \
+            -Db_sanitize=address,undefined \
+            -Db_lundef=false \
+            --wrap-mode=nofallback
+
+      - name: Build
+        run: meson compile -C builddir
+
+      # Every mode, because each drives a different cache: dump the shape cache,
+      # threads the shards under contention, reuse the item and break caches
+      # across paragraphs. Leak checking is off because the fontconfig fontmap
+      # is per-thread and never torn down, which is not a bug this job is for.
+      - name: Run every harness mode under the sanitizers
+        run: |
+          for mode in dump reuse spacing synthesis; do
+            builddir/tests/ns-text-check $mode > /dev/null
+          done
+          builddir/tests/ns-text-check threads 8
+          NS_PANGO_SHAPE_CACHE=verify builddir/tests/ns-text-check dump > /dev/null
+          NS_PANGO_SHAPE_CACHE=0 builddir/tests/ns-text-check dump > /dev/null
