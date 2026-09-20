@@ -36,11 +36,19 @@
  * real width and again to paint -- that was still being redone each time.
  *
  * The items it returns depend on the text, the base direction, the attributes
- * that reach font selection, and the context: its font description, language,
- * gravity and matrix, and which fonts the font map holds. All but the text and
- * the attributes are folded into the context's serial, which changes whenever
- * any of them does -- including when a web font arrives -- so an entry keyed on
- * a stale serial is simply never found again.
+ * that reach font selection, where the paragraph sits in the text the
+ * attributes are ranges over, and the context: its font description, language,
+ * gravity and matrix, and which fonts the font map holds. All but the text, the
+ * offset and the attributes are folded into the context's serial, which changes
+ * whenever any of them does -- including when a web font arrives -- so an entry
+ * keyed on a stale serial is simply never found again.
+ *
+ * The offset is in the key because the attributes are not clipped to the
+ * paragraph: a layout over "Hello\nHello" with bold on the first five bytes
+ * itemises both paragraphs with the same list, and only the offset says which
+ * of them the bold reaches. Keying on it costs hits only for the same
+ * paragraph at different offsets in different texts, which a browser laying
+ * out one inline box per layout never produces.
  *
  * The items are handed back as copies, because the line breaker splits and
  * rewrites them.
@@ -64,6 +72,7 @@ typedef struct
   gpointer         context;
   guint            serial;
   guint32          base_dir;
+  guint32          start_index;
   guint32          length;
   const char      *text;
   NsPangoAttrList *attrs;      /* borrowed in a probe, owned in an entry */
@@ -196,6 +205,7 @@ item_key_equal (gconstpointer a,
       ka->context != kb->context ||
       ka->serial != kb->serial ||
       ka->base_dir != kb->base_dir ||
+      ka->start_index != kb->start_index ||
       ka->length != kb->length ||
       memcmp (ka->text, kb->text, ka->length) != 0)
     return FALSE;
@@ -263,6 +273,7 @@ probe_init (ItemKey          *key,
   key->serial = ns_pango_context_get_serial (context);
   key->context = context;
   key->base_dir = (guint32) base_dir;
+  key->start_index = (guint32) start_index;
   key->length = (guint32) length;
   key->text = slice;
   key->attrs = attrs;
@@ -270,6 +281,7 @@ probe_init (ItemKey          *key,
 
   hash = hash * 33 + key->serial;
   hash = hash * 33 + (guint) base_dir;
+  hash = hash * 33 + (guint) start_index;
   hash = hash * 33 + (guint) length;
   key->hash = mix_hash (hash_attrs (hash, attrs));
 
