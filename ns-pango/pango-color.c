@@ -161,7 +161,7 @@ compare_xcolor_entries (const void *a, const void *b)
     {
       int c1, c2;
       while (*s1 == ' ') s1++;
-      while (*s2 == ' ') s1++;
+      while (*s2 == ' ') s2++;
       c1 = (gint)(guchar) TOLOWER (*s1);
       c2 = (gint)(guchar) TOLOWER (*s2);
       if (c1 != c2)

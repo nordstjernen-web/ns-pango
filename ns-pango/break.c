@@ -2312,7 +2312,7 @@ handle_sentences (const char    *text,
       if (end < offset + length)
         {
           gboolean in_sentence = FALSE;
-          for (pos = end_pos + 1; end_pos < log_attrs_len; pos++)
+          for (pos = end_pos + 1; pos < log_attrs_len; pos++)
             {
               if (log_attrs[pos].is_sentence_start)
                 break;

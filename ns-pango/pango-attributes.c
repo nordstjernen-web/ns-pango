@@ -3080,7 +3080,10 @@ ns_pango_attr_list_from_string (const char *text)
               while (len > 0 && p[len - 1] == ' ')
                 len--;
 
-              if (p[len - 1] != '"') goto fail;
+              /* A single quote passes the closing-quote test below against
+               * itself, and len - 2 is then -1: as a gsize, an unbounded copy.
+               */
+              if (len < 2 || p[len - 1] != '"') goto fail;
 
               str2 = g_strndup (p + 1, len - 2);
               str = g_strcompress (str2);
