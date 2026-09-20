@@ -350,6 +350,16 @@ the font for shaping.
 - ThreadSanitizer reports races inside fontconfig's own `FcFontSetMatch` and
   `FcFontSetSort` when two fontmaps match concurrently. They do not currently
   change output, and AddressSanitizer is clean.
+- The shape cache holds a reference on every font it has an entry for, and the
+  item cache on every context. An entry is freed on whichever thread evicts
+  it — an insert that makes room, `ns_pango_cache_trim`, `ns_pango_cache_clear`
+  — and if that reference was the last, the font's finalizer removes it from
+  its fontmap's unlocked tables on that thread, while the thread that owns the
+  fontmap may be reading them. A fontmap that outlives its fonts, which is the
+  normal case, never hits this; a thread that tears its fontmap down while its
+  runs are still cached, or a memory-pressure thread calling trim or clear,
+  can. Same root cause as the first item: the fontmap's tables are the thing
+  that needs a lock before layout goes parallel.
 - `ns_pango_attr_list_equal` compares two lists by scanning the second one for
   each attribute of the first, so it is quadratic in the number of attributes.
   The item cache no longer calls it: it compares the two lists in order, which
