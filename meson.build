@@ -155,6 +155,17 @@ elif cc_argument_syntax == 'gcc'
   else
     test_cflags += [ '-Werror=redundant-decls' ]
   endif
+
+  # Hardening. Every byte this library parses came off the network, and the
+  # browser links it into the process that also holds the page's scripts. Ubuntu's
+  # gcc turns all of these on by itself; its clang, and any toolchain that is not
+  # Ubuntu's, does not, so they are asked for by name. Each one is dropped where
+  # the compiler does not know it (-fcf-protection is x86 only).
+  test_cflags += [
+    '-fstack-protector-strong',
+    '-fstack-clash-protection',
+    '-fcf-protection',
+  ]
 else
   test_cflags = []
   test_c_only_flags = []
@@ -199,13 +210,26 @@ if ns_pango_optimized
         '-fno-plt',
       ])
     endif
+    # Bounds checks on the libc calls whose sizes the compiler can see, which is
+    # most of the memcpy and strlen this tree does. Only meaningful with
+    # optimisation, which is why it sits here. The -U first is for a toolchain
+    # that already defines it at another level, where a plain -D would be a
+    # redefinition warning on every translation unit.
+    if cc.has_header_symbol('features.h', '__GLIBC__')
+      ns_pango_optimization_cflags += ['-U_FORTIFY_SOURCE', '-D_FORTIFY_SOURCE=3']
+    endif
   endif
 endif
 common_cflags += ns_pango_optimization_cflags
 
 # Linker flags
 if host_machine.system() == 'linux'
-  common_ldflags += cc.get_supported_link_arguments([ '-Wl,-Bsymbolic', '-Wl,-z,relro', '-Wl,-z,now', ])
+  common_ldflags += cc.get_supported_link_arguments([
+    '-Wl,-Bsymbolic',
+    '-Wl,-z,relro',
+    '-Wl,-z,now',
+    '-Wl,-z,noexecstack',
+  ])
 endif
 if ns_pango_optimized
   if cc_argument_syntax == 'msvc'
