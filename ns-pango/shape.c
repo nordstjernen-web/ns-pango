@@ -82,21 +82,90 @@ release_buffer (hb_buffer_t *buffer)
 /* }}} */
 /* {{{ Use NsPangoFont with Harfbuzz */
 
+/* The glyphs we make up -- unknown-glyph boxes and the empty glyph -- lie far
+ * outside the glyph space, and HarfBuzz must not see them. Its per-face
+ * coverage cache (get_coverage_binary in OT/Layout/Common/Coverage.hh,
+ * hb_ot_layout_binary_cache_t) has 14-bit keys and stores every glyph it is
+ * asked about with set_unchecked(), which drops the high bits: shaping a space
+ * with a font that has none (any icon font) recorded "not covered" for the real
+ * glyph whose id matched the low bits -- 0x10000020 lands on glyph 32 -- and
+ * every later ligature starting with that glyph stopped forming for as long as
+ * the face lived. So HarfBuzz gets a stand-in for each made-up glyph instead: an
+ * id just past the font's last glyph, which no lookup covers, and which the
+ * advance and extents callbacks below answer for as the made-up glyph would.
+ * ns_pango_hb_shape puts the made-up glyphs back. A font too big to leave room
+ * for stand-ins under the cache's key range gets the made-up ids as before.
+ */
+#define NS_PANGO_STAND_IN_END (1u << 14)
+
 typedef struct
 {
   NsPangoFont *font;
   hb_font_t *parent;
   NsPangoShowFlags show_flags;
+  hb_codepoint_t stand_in_base;
+  GArray *stand_ins;
+  GHashTable *stand_in_index;
 } NsPangoHbShapeContext;
 
-static hb_bool_t
-ns_pango_hb_font_get_nominal_glyph (hb_font_t      *font,
-                                 void           *font_data,
-                                 hb_codepoint_t  unicode,
-                                 hb_codepoint_t *glyph,
-                                 void           *user_data G_GNUC_UNUSED)
+static hb_codepoint_t
+stand_in_for (NsPangoHbShapeContext *context,
+              hb_codepoint_t         made_up)
 {
-  NsPangoHbShapeContext *context = (NsPangoHbShapeContext *) font_data;
+  gpointer index;
+  hb_codepoint_t stand_in;
+
+  if (context->stand_ins == NULL)
+    {
+      context->stand_ins = g_array_new (FALSE, FALSE, sizeof (hb_codepoint_t));
+      context->stand_in_index = g_hash_table_new (NULL, NULL);
+    }
+
+  if (g_hash_table_lookup_extended (context->stand_in_index,
+                                    GUINT_TO_POINTER (made_up), NULL, &index))
+    return context->stand_in_base + GPOINTER_TO_UINT (index);
+
+  stand_in = context->stand_in_base + context->stand_ins->len;
+  if (stand_in >= NS_PANGO_STAND_IN_END)
+    return made_up;
+
+  g_hash_table_insert (context->stand_in_index, GUINT_TO_POINTER (made_up),
+                       GUINT_TO_POINTER (context->stand_ins->len));
+  g_array_append_val (context->stand_ins, made_up);
+
+  return stand_in;
+}
+
+static hb_codepoint_t
+made_up_for (const NsPangoHbShapeContext *context,
+             hb_codepoint_t               glyph)
+{
+  if (context->stand_ins != NULL &&
+      glyph >= context->stand_in_base &&
+      glyph - context->stand_in_base < context->stand_ins->len)
+    return g_array_index (context->stand_ins, hb_codepoint_t,
+                          glyph - context->stand_in_base);
+
+  return glyph;
+}
+
+static void
+free_stand_ins (NsPangoHbShapeContext *context)
+{
+  if (context->stand_ins == NULL)
+    return;
+
+  g_array_free (context->stand_ins, TRUE);
+  g_hash_table_destroy (context->stand_in_index);
+  context->stand_ins = NULL;
+  context->stand_in_index = NULL;
+}
+
+static hb_bool_t
+ns_pango_nominal_or_unknown_glyph (NsPangoHbShapeContext *context,
+                                   hb_codepoint_t         unicode,
+                                   hb_codepoint_t        *glyph)
+{
 
   if (context->show_flags != 0)
     {
@@ -172,6 +241,22 @@ ns_pango_hb_font_get_nominal_glyph (hb_font_t      *font,
   return FALSE;
 }
 
+static hb_bool_t
+ns_pango_hb_font_get_nominal_glyph (hb_font_t      *font,
+                                 void           *font_data,
+                                 hb_codepoint_t  unicode,
+                                 hb_codepoint_t *glyph,
+                                 void           *user_data G_GNUC_UNUSED)
+{
+  NsPangoHbShapeContext *context = (NsPangoHbShapeContext *) font_data;
+  hb_bool_t found = ns_pango_nominal_or_unknown_glyph (context, unicode, glyph);
+
+  if (*glyph > 0xFFFF)
+    *glyph = stand_in_for (context, *glyph);
+
+  return found;
+}
+
 static hb_position_t
 ns_pango_hb_font_get_glyph_h_advance (hb_font_t      *font,
                                    void           *font_data,
@@ -179,6 +264,8 @@ ns_pango_hb_font_get_glyph_h_advance (hb_font_t      *font,
                                    void           *user_data G_GNUC_UNUSED)
 {
   NsPangoHbShapeContext *context = (NsPangoHbShapeContext *) font_data;
+
+  glyph = made_up_for (context, glyph);
 
   if (glyph & NS_PANGO_GLYPH_UNKNOWN_FLAG)
     {
@@ -199,6 +286,8 @@ ns_pango_hb_font_get_glyph_v_advance (hb_font_t      *font,
 {
   NsPangoHbShapeContext *context = (NsPangoHbShapeContext *) font_data;
 
+  glyph = made_up_for (context, glyph);
+
   if (glyph & NS_PANGO_GLYPH_UNKNOWN_FLAG)
     {
       NsPangoRectangle logical;
@@ -218,6 +307,8 @@ ns_pango_hb_font_get_glyph_extents (hb_font_t          *font,
                                  void               *user_data G_GNUC_UNUSED)
 {
   NsPangoHbShapeContext *context = (NsPangoHbShapeContext *) font_data;
+
+  glyph = made_up_for (context, glyph);
 
   if (glyph & NS_PANGO_GLYPH_UNKNOWN_FLAG)
     {
@@ -260,6 +351,9 @@ ns_pango_font_get_hb_font_for_context (NsPangoFont           *font,
 
   context->font = font;
   context->parent = hb_font;
+  context->stand_in_base = hb_face_get_glyph_count (hb_font_get_face (hb_font));
+  context->stand_ins = NULL;
+  context->stand_in_index = NULL;
 
   hb_font = hb_font_create_sub_font (hb_font);
   hb_font_set_funcs (hb_font, funcs, context, NULL);
@@ -620,7 +714,7 @@ ns_pango_hb_shape (const char          *item_text,
 
   for (i = 0; i < num_glyphs; i++)
     {
-      infos[i].glyph = hb_glyph->codepoint;
+      infos[i].glyph = made_up_for (&context, hb_glyph->codepoint);
       glyphs->log_clusters[i] = hb_glyph->cluster - item_offset;
       infos[i].attr.is_cluster_start = glyphs->log_clusters[i] != last_cluster;
       infos[i].attr.is_color = font_is_color && glyph_has_color (hb_font, hb_glyph->codepoint);
@@ -652,6 +746,7 @@ ns_pango_hb_shape (const char          *item_text,
 
   release_buffer (hb_buffer);
   hb_font_destroy (hb_font);
+  free_stand_ins (&context);
 }
 
 /* }}} */
